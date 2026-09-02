@@ -9,6 +9,8 @@ import {
   clientTemplate,
   configTemplate,
   dockerfileTemplate,
+  docsModuleTemplate,
+  docsPageTemplate,
   envExampleTemplate,
   mcpFactoryTemplate,
   packageJsonTemplate,
@@ -86,6 +88,7 @@ export async function generateServer(options: GenerateOptions): Promise<Generate
     "src/client.ts": clientTemplate(),
     "src/tools.ts": toolsDataTemplate(tools),
     "src/mcp-factory.ts": mcpFactoryTemplate(`${pkgSlug}-mcp`),
+    "src/docs.ts": docsModuleTemplate(docsPageTemplate(apiTitle, tools, "/mcp")),
     "src/server.ts": serverTemplate(),
   };
 
@@ -112,6 +115,7 @@ export async function generateVercelServer(options: GenerateOptions): Promise<Ge
     "lib/mcp-factory.ts": mcpFactoryTemplate(`${pkgSlug}-mcp`),
     "api/mcp.ts": vercelMcpHandlerTemplate(),
     "api/health.ts": vercelHealthHandlerTemplate(),
+    "public/index.html": docsPageTemplate(apiTitle, tools, "/api/mcp"),
   };
 
   const filesWritten = await writeFiles(outDir, files);
