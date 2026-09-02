@@ -1,6 +1,6 @@
 import type { OpenAPIV3 } from "openapi-types";
 import { toSnakeCase } from "./naming.js";
-import type { JsonSchema, JsonSchemaProperty, ToolDesignIssue } from "./types.js";
+import type { JsonSchema, JsonSchemaProperty, ParameterMapping, ToolDesignIssue } from "./types.js";
 
 /**
  * Builds an agent-facing input schema from an operation's parameters and
@@ -16,9 +16,10 @@ import type { JsonSchema, JsonSchemaProperty, ToolDesignIssue } from "./types.js
  */
 export function buildInputSchema(
   operation: OpenAPIV3.OperationObject,
-): { schema: JsonSchema; issues: ToolDesignIssue[] } {
+): { schema: JsonSchema; parameterMap: Record<string, ParameterMapping>; issues: ToolDesignIssue[] } {
   const properties: Record<string, JsonSchemaProperty> = {};
   const required: string[] = [];
+  const parameterMap: Record<string, ParameterMapping> = {};
   const issues: ToolDesignIssue[] = [];
 
   for (const param of operation.parameters ?? []) {
@@ -34,6 +35,7 @@ export function buildInputSchema(
     }
 
     properties[name] = schemaToProperty(param.schema, param.description);
+    parameterMap[name] = { source: param.in, originalName: param.name };
     if (param.required) required.push(name);
   }
 
@@ -49,10 +51,12 @@ export function buildInputSchema(
           });
         }
         properties[name] = schemaToProperty(propSchema);
+        parameterMap[name] = { source: "body", originalName: rawName };
         if (bodySchema.required?.includes(rawName)) required.push(name);
       }
     } else {
       properties.body = schemaToProperty(bodySchema as OpenAPIV3.SchemaObject, "Request body.");
+      parameterMap.body = { source: "body-raw", originalName: "body" };
       if (operation.requestBody && !("$ref" in operation.requestBody) && operation.requestBody.required) {
         required.push("body");
       }
@@ -65,6 +69,7 @@ export function buildInputSchema(
       properties,
       ...(required.length > 0 ? { required: [...new Set(required)] } : {}),
     },
+    parameterMap,
     issues,
   };
 }

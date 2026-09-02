@@ -25,12 +25,13 @@ export function designTools(document: OpenAPIV3.Document): ToolDefinition[] {
       if (!operation) continue;
 
       const description = (operation.description ?? operation.summary ?? "").trim();
-      const { schema, issues } = buildInputSchema(operation);
+      const { schema, parameterMap, issues } = buildInputSchema(operation);
 
       tools.push({
         name: deriveToolName(method, pathKey),
         description,
         inputSchema: schema,
+        parameterMap,
         method: method.toUpperCase(),
         path: pathKey,
         operationId: operation.operationId,
