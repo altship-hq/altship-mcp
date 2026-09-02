@@ -102,8 +102,22 @@ export async function deployFiles(
 
   const deployment = (await created.json()) as { id: string; url: string; readyState: string };
   const finalState = await pollUntilReady(deployment.id);
+  const url = await getProductionDomain(project.id);
 
-  return { id: deployment.id, url: `https://${deployment.url}`, readyState: finalState };
+  // deployment.url is the per-deployment hash URL, which sits behind Vercel's
+  // team-level Deployment Protection (SSO) even for production deploys --
+  // the assigned project domain doesn't, and is what a customer should
+  // actually be given. Fall back to the deployment URL only if for some
+  // reason no domain has been assigned yet.
+  return { id: deployment.id, url: url ?? `https://${deployment.url}`, readyState: finalState };
+}
+
+async function getProductionDomain(projectId: string): Promise<string | undefined> {
+  const res = await vercelFetch(`/v9/projects/${projectId}/domains`);
+  if (!res.ok) return undefined;
+  const data = (await res.json()) as { domains: Array<{ name: string }> };
+  const domain = data.domains[0]?.name;
+  return domain ? `https://${domain}` : undefined;
 }
 
 async function pollUntilReady(deploymentId: string, timeoutMs = 90_000): Promise<string> {
