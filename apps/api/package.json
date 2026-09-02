@@ -12,6 +12,7 @@
     "@altship/mcp-gen": "^0.0.1",
     "@altship/openapi": "^0.0.1",
     "@altship/tool-design": "^0.0.1",
+    "dotenv": "^16.4.7",
     "express": "^5.0.1"
   },
   "devDependencies": {

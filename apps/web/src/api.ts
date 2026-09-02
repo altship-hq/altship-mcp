@@ -6,6 +6,12 @@ export interface ValidationIssue {
   path?: string;
 }
 
+export interface AuthRequirement {
+  kind: string;
+  envVar: string;
+  paramName?: string;
+}
+
 export interface ToolDefinition {
   name: string;
   description: string;
@@ -23,11 +29,23 @@ export interface ToolsResponse {
   apiTitle: string | null;
   issues: ValidationIssue[];
   tools: ToolDefinition[];
+  auth: AuthRequirement | null;
 }
 
 export interface GenerateResponse {
   outDir: string;
   filesWritten: string[];
+  warnings: string[];
+}
+
+export interface DeployResponse {
+  id: string;
+  createdAt: string;
+  apiTitle: string;
+  toolNames: string[];
+  projectName: string;
+  projectId: string;
+  url: string;
   warnings: string[];
 }
 
@@ -52,4 +70,8 @@ export type Platform = "node" | "vercel";
 
 export function generateServer(spec: string, toolNames: string[], platform: Platform): Promise<GenerateResponse> {
   return postJson<GenerateResponse>("/api/generate", { spec, toolNames, platform });
+}
+
+export function deployToVercel(spec: string, toolNames: string[], credentialValue?: string): Promise<DeployResponse> {
+  return postJson<DeployResponse>("/api/deploy", { spec, toolNames, credentialValue });
 }

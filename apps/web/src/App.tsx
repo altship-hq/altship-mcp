@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react";
 import {
+  deployToVercel,
   generateServer,
   importSpec,
+  type AuthRequirement,
+  type DeployResponse,
   type GenerateResponse,
   type Platform,
   type ToolDefinition,
@@ -21,11 +24,15 @@ export default function App() {
   const [tools, setTools] = useState<ToolDefinition[]>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [platform, setPlatform] = useState<Platform>("node");
+  const [authRequirement, setAuthRequirement] = useState<AuthRequirement | null>(null);
+  const [credentialValue, setCredentialValue] = useState("");
 
   const [generateResult, setGenerateResult] = useState<GenerateResponse | null>(null);
+  const [deployResult, setDeployResult] = useState<DeployResponse | null>(null);
 
   const groups = useMemo(() => groupByNamespace(tools), [tools]);
   const selectedCount = Object.values(selected).filter(Boolean).length;
+  const needsCredential = platform === "vercel" && authRequirement !== null;
 
   async function handleImport() {
     setLoading(true);
@@ -35,6 +42,7 @@ export default function App() {
       setApiTitle(result.apiTitle);
       setIssues(result.issues);
       setTools(result.tools);
+      setAuthRequirement(result.auth);
 
       const initialSelection: Record<string, boolean> = {};
       for (const tool of result.tools) initialSelection[tool.name] = !tool.destructive;
@@ -55,8 +63,14 @@ export default function App() {
       const toolNames = Object.entries(selected)
         .filter(([, checked]) => checked)
         .map(([name]) => name);
-      const result = await generateServer(specInput.trim(), toolNames, platform);
-      setGenerateResult(result);
+
+      if (platform === "vercel") {
+        const result = await deployToVercel(specInput.trim(), toolNames, credentialValue || undefined);
+        setDeployResult(result);
+      } else {
+        const result = await generateServer(specInput.trim(), toolNames, platform);
+        setGenerateResult(result);
+      }
       setStep("result");
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : String(err));
@@ -73,7 +87,10 @@ export default function App() {
     setIssues([]);
     setTools([]);
     setSelected({});
+    setAuthRequirement(null);
+    setCredentialValue("");
     setGenerateResult(null);
+    setDeployResult(null);
   }
 
   return (
@@ -160,16 +177,67 @@ export default function App() {
                 checked={platform === "vercel"}
                 onChange={() => setPlatform("vercel")}
               />
-              Vercel (serverless)
+              Vercel (managed — deploys to a live URL)
             </label>
           </div>
+
+          {needsCredential && (
+            <div className="credential-field">
+              <label htmlFor="credential">
+                {authRequirement?.envVar} <span className="hint">— required to deploy; stored as an encrypted Vercel env var, never written to the generated code</span>
+              </label>
+              <input
+                id="credential"
+                type="password"
+                value={credentialValue}
+                onChange={(e) => setCredentialValue(e.target.value)}
+                placeholder="Paste the upstream API credential"
+              />
+            </div>
+          )}
 
           <div className="actions">
             <button className="secondary" onClick={reset}>
               Back
             </button>
-            <button disabled={loading || selectedCount === 0} onClick={handleGenerate}>
-              {loading ? "Generating…" : `Generate MCP Server (${selectedCount} tool(s))`}
+            <button
+              disabled={loading || selectedCount === 0 || (needsCredential && !credentialValue.trim())}
+              onClick={handleGenerate}
+            >
+              {loading
+                ? platform === "vercel"
+                  ? "Deploying…"
+                  : "Generating…"
+                : platform === "vercel"
+                  ? `Deploy to Vercel (${selectedCount} tool(s))`
+                  : `Generate MCP Server (${selectedCount} tool(s))`}
+            </button>
+          </div>
+        </section>
+      )}
+
+      {step === "result" && deployResult && (
+        <section className="card">
+          <h2>Deployed</h2>
+          <p>
+            <a href={deployResult.url} target="_blank" rel="noreferrer">
+              {deployResult.url}
+            </a>
+          </p>
+          <p className="subtitle">
+            Project <code>{deployResult.projectName}</code> under the altship-mcp org, exposing{" "}
+            {deployResult.toolNames.length} tool(s).
+          </p>
+          {deployResult.warnings.length > 0 && (
+            <div className="banner warning">
+              {deployResult.warnings.map((w) => (
+                <div key={w}>{w}</div>
+              ))}
+            </div>
+          )}
+          <div className="actions">
+            <button className="secondary" onClick={reset}>
+              Start over
             </button>
           </div>
         </section>
