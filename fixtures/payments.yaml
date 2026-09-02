@@ -1,0 +1,42 @@
+openapi: "3.0.0"
+info:
+  title: Payments API
+  version: 1.0.0
+paths:
+  /v1/payments/{paymentId}:
+    get:
+      operationId: getPayment
+      description: Retrieve a payment by its ID.
+      parameters:
+        - name: paymentId
+          in: path
+          required: true
+          description: The payment ID.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+  /v1/payments/{paymentId}/refund:
+    post:
+      operationId: refundPayment
+      description: Refund a previously captured payment, in full or in part.
+      parameters:
+        - name: paymentId
+          in: path
+          required: true
+          description: The payment ID.
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount:
+                  type: integer
+                  description: Amount to refund, in cents. Omit to refund in full.
+      responses:
+        '200':
+          description: ok
