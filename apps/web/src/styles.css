@@ -78,6 +78,30 @@ button.link {
   text-decoration: underline;
 }
 
+.platform-picker {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid #f0f1f3;
+  font-size: 0.9rem;
+}
+
+.platform-picker label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: normal;
+  margin: 0;
+  cursor: pointer;
+}
+
+.platform-label {
+  color: #5b6270;
+  font-weight: 600;
+}
+
 .actions {
   display: flex;
   justify-content: space-between;

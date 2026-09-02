@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { validateSpec } from "@altship/openapi";
 import { designTools } from "@altship/tool-design";
-import { generateServer } from "@altship/mcp-gen";
+import { generateServer, generateVercelServer } from "@altship/mcp-gen";
 
 const app = express();
 app.use(express.json());
@@ -36,6 +36,7 @@ app.post("/api/tools", async (req, res) => {
 app.post("/api/generate", async (req, res) => {
   const spec = req.body?.spec;
   const toolNames: unknown = req.body?.toolNames;
+  const platform = req.body?.platform === "vercel" ? "vercel" : "node";
 
   if (typeof spec !== "string" || spec.trim() === "") {
     return res.status(400).json({ error: "Missing required field: spec (URL or file path)." });
@@ -57,7 +58,8 @@ app.post("/api/generate", async (req, res) => {
   }
 
   const outDir = path.join(os.tmpdir(), `altship-mcp-${Date.now()}`);
-  const result = await generateServer({ document: validation.document, tools, outDir });
+  const generate = platform === "vercel" ? generateVercelServer : generateServer;
+  const result = await generate({ document: validation.document, tools, outDir });
 
   res.json(result);
 });

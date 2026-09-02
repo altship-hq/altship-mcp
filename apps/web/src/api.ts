@@ -48,6 +48,8 @@ export function importSpec(spec: string): Promise<ToolsResponse> {
   return postJson<ToolsResponse>("/api/tools", { spec });
 }
 
-export function generateServer(spec: string, toolNames: string[]): Promise<GenerateResponse> {
-  return postJson<GenerateResponse>("/api/generate", { spec, toolNames });
+export type Platform = "node" | "vercel";
+
+export function generateServer(spec: string, toolNames: string[], platform: Platform): Promise<GenerateResponse> {
+  return postJson<GenerateResponse>("/api/generate", { spec, toolNames, platform });
 }

@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 import { validateSpec } from "@altship/openapi";
 import { designTools } from "@altship/tool-design";
-import { generateServer } from "./generate.js";
+import { generateServer, generateVercelServer } from "./generate.js";
 
-const [spec, outDir] = process.argv.slice(2);
+const args = process.argv.slice(2).filter((a) => a !== "--vercel");
+const useVercel = process.argv.includes("--vercel");
+const [spec, outDir] = args;
 
 if (!spec || !outDir) {
-  console.error("Usage: altship-mcp-gen <path-or-url-to-openapi-spec> <output-dir>");
+  console.error("Usage: altship-mcp-gen <path-or-url-to-openapi-spec> <output-dir> [--vercel]");
   process.exit(1);
 }
 
@@ -17,7 +19,8 @@ if (!validation.document) {
 }
 
 const tools = designTools(validation.document);
-const result = await generateServer({ document: validation.document, tools, outDir });
+const generate = useVercel ? generateVercelServer : generateServer;
+const result = await generate({ document: validation.document, tools, outDir });
 
 console.log(`Generated ${result.filesWritten.length} files into ${result.outDir}:`);
 for (const file of result.filesWritten) console.log(`  ${file}`);

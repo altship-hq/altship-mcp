@@ -1,5 +1,12 @@
 import { useMemo, useState } from "react";
-import { generateServer, importSpec, type GenerateResponse, type ToolDefinition, type ValidationIssue } from "./api.js";
+import {
+  generateServer,
+  importSpec,
+  type GenerateResponse,
+  type Platform,
+  type ToolDefinition,
+  type ValidationIssue,
+} from "./api.js";
 
 type Step = "import" | "select" | "result";
 
@@ -13,6 +20,7 @@ export default function App() {
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
   const [tools, setTools] = useState<ToolDefinition[]>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [platform, setPlatform] = useState<Platform>("node");
 
   const [generateResult, setGenerateResult] = useState<GenerateResponse | null>(null);
 
@@ -47,7 +55,7 @@ export default function App() {
       const toolNames = Object.entries(selected)
         .filter(([, checked]) => checked)
         .map(([name]) => name);
-      const result = await generateServer(specInput.trim(), toolNames);
+      const result = await generateServer(specInput.trim(), toolNames, platform);
       setGenerateResult(result);
       setStep("result");
     } catch (err) {
@@ -133,6 +141,28 @@ export default function App() {
               ))}
             </div>
           ))}
+
+          <div className="platform-picker">
+            <span className="platform-label">Deploy target:</span>
+            <label>
+              <input
+                type="radio"
+                name="platform"
+                checked={platform === "node"}
+                onChange={() => setPlatform("node")}
+              />
+              Node + Docker (self-hosted)
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="platform"
+                checked={platform === "vercel"}
+                onChange={() => setPlatform("vercel")}
+              />
+              Vercel (serverless)
+            </label>
+          </div>
 
           <div className="actions">
             <button className="secondary" onClick={reset}>
