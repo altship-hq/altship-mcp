@@ -1,0 +1,26 @@
+openapi: "3.0.0"
+info:
+  title: Duplicate Op IDs API
+  version: 1.0.0
+paths:
+  /widgets:
+    get:
+      operationId: getWidget
+      description: List all widgets in the account.
+      responses:
+        '200':
+          description: ok
+  /widgets/{id}:
+    get:
+      operationId: getWidget
+      description: Fetch a single widget by its ID.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The widget ID.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
