@@ -8,7 +8,7 @@ import { readFile, rm } from "node:fs/promises";
 import { validateSpec } from "@altship/openapi";
 import { designTools } from "@altship/tool-design";
 import { generateServer, generateVercelServer, deriveAuthBinding, envSlug } from "@altship/mcp-gen";
-import { ensureProject, setProjectEnvVar, deployFiles, VercelConfigError } from "./vercel-client.js";
+import { ensureProject, setProjectEnvVar, assignMcpSubdomain, deployFiles, VercelConfigError } from "./vercel-client.js";
 import { recordDeployment, listDeployments } from "./store.js";
 import { requireAuth } from "./auth-middleware.js";
 
@@ -135,6 +135,11 @@ app.post("/api/deploy", requireAuth, async (req, res) => {
     if (binding.envVar && typeof credentialValue === "string") {
       await setProjectEnvVar(project.id, binding.envVar, credentialValue);
     }
+
+    // Best-effort: gives the deployment a "<slug>.mcp.altship.io" URL
+    // instead of a random *.vercel.app one. deployFiles() falls back
+    // gracefully if this doesn't succeed (e.g. DNS not propagated yet).
+    await assignMcpSubdomain(project);
 
     const deployment = await deployFiles(project, files);
 

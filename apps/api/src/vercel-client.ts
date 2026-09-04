@@ -68,6 +68,32 @@ export async function setProjectEnvVar(projectId: string, key: string, value: st
   }
 }
 
+/**
+ * Assigns "<subdomain>.mcp.altship.io" to a project, matching the domain
+ * architecture: *.mcp.altship.io is a wildcard DNS record, but each customer
+ * deployment still needs its own exact-match domain->project assignment on
+ * Vercel's side (the wildcard just gets traffic to Vercel's edge; routing to
+ * a specific project is still per-hostname). Returns undefined rather than
+ * throwing if this fails -- deployFiles() falls back to the project's
+ * default *.vercel.app domain, so a DNS hiccup here shouldn't fail the
+ * whole deployment.
+ */
+export async function assignMcpSubdomain(project: VercelProject): Promise<string | undefined> {
+  const domain = `${project.name}.mcp.altship.io`;
+  const res = await vercelFetch(`/v10/projects/${project.id}/domains`, {
+    method: "POST",
+    body: JSON.stringify({ name: domain }),
+  });
+
+  if (!res.ok) {
+    console.error(`Failed to assign ${domain}: ${res.status} ${await res.text()}`);
+    return undefined;
+  }
+
+  const data = (await res.json()) as { verified: boolean };
+  return data.verified ? domain : undefined;
+}
+
 export interface DeployResult {
   id: string;
   url: string;
@@ -116,7 +142,10 @@ async function getProductionDomain(projectId: string): Promise<string | undefine
   const res = await vercelFetch(`/v9/projects/${projectId}/domains`);
   if (!res.ok) return undefined;
   const data = (await res.json()) as { domains: Array<{ name: string }> };
-  const domain = data.domains[0]?.name;
+  // Prefer our own mcp.altship.io subdomain over the project's default
+  // *.vercel.app one, if both are present.
+  const preferred = data.domains.find((d) => d.name.endsWith(".mcp.altship.io"));
+  const domain = preferred?.name ?? data.domains[0]?.name;
   return domain ? `https://${domain}` : undefined;
 }
 
