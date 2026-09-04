@@ -1,25 +1,43 @@
 import type { OpenAPIV3 } from "openapi-types";
 
-export type AuthKind = "apiKey-header" | "apiKey-query" | "bearer" | "basic" | "none";
+export type AuthKind = "apiKey-header" | "apiKey-query" | "bearer" | "basic" | "passthrough" | "none";
 
 export interface AuthBinding {
   kind: AuthKind;
-  /** Env var the generated server reads the credential from, e.g. ACME_API_TOKEN. */
-  envVar: string;
+  /**
+   * Env var the generated server reads the credential from, e.g. ACME_API_TOKEN.
+   * Not used for "passthrough" — there's no server-side secret to configure.
+   */
+  envVar?: string;
   /** For apiKey schemes: the header or query parameter name credentials go in. */
   paramName?: string;
   schemeName?: string;
+}
+
+export interface DeriveAuthOptions {
+  /**
+   * Forward each caller's own bearer token to the upstream API instead of a
+   * single shared server-side credential -- the MCP server acts as the
+   * calling end-user rather than a global service account. Only meaningful
+   * when the spec's scheme is http-bearer (that's the shape an OAuth access
+   * token takes); ignored otherwise. We don't validate the token ourselves --
+   * the upstream API does that anyway, so relaying it unmodified is a sound
+   * default rather than reimplementing OAuth verification here.
+   */
+  passthrough?: boolean;
 }
 
 /**
  * V1 supports exactly one auth scheme per generated server (apiKey or
  * bearer/basic http auth) — the first one referenced by the spec's global
  * `security` requirement, falling back to the first securityScheme defined
- * at all. Multi-scheme / OAuth specs fall back to "none" with a warning;
- * per the product brief, OAuth is explicitly out of scope until the
- * platform matures.
+ * at all. Multi-scheme specs fall back to "none" with a warning.
  */
-export function deriveAuthBinding(document: OpenAPIV3.Document, apiSlug: string): {
+export function deriveAuthBinding(
+  document: OpenAPIV3.Document,
+  apiSlug: string,
+  options: DeriveAuthOptions = {},
+): {
   binding: AuthBinding;
   warning?: string;
 } {
@@ -53,6 +71,9 @@ export function deriveAuthBinding(document: OpenAPIV3.Document, apiSlug: string)
   }
 
   if (scheme.type === "http" && scheme.scheme === "bearer") {
+    if (options.passthrough) {
+      return { binding: { kind: "passthrough", schemeName } };
+    }
     return { binding: { kind: "bearer", envVar, schemeName } };
   }
 

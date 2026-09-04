@@ -45,6 +45,9 @@ app.post("/api/tools", async (req, res) => {
     issues: validation.issues,
     tools,
     auth: binding.kind === "none" ? null : { kind: binding.kind, envVar: binding.envVar, paramName: binding.paramName },
+    // Passthrough (forwarding each caller's own token instead of one shared
+    // credential) only makes sense for http-bearer schemes.
+    passthroughAvailable: binding.kind === "bearer",
   });
 });
 
@@ -52,6 +55,7 @@ app.post("/api/generate", requireAuth, async (req, res) => {
   const spec = req.body?.spec;
   const toolNames: unknown = req.body?.toolNames;
   const platform = req.body?.platform === "vercel" ? "vercel" : "node";
+  const authMode = req.body?.authMode === "passthrough" ? "passthrough" : "static";
 
   if (typeof spec !== "string" || spec.trim() === "") {
     return res.status(400).json({ error: "Missing required field: spec (URL or file path)." });
@@ -74,7 +78,7 @@ app.post("/api/generate", requireAuth, async (req, res) => {
 
   const outDir = path.join(os.tmpdir(), `altship-mcp-${Date.now()}`);
   const generate = platform === "vercel" ? generateVercelServer : generateServer;
-  const result = await generate({ document: validation.document, tools, outDir });
+  const result = await generate({ document: validation.document, tools, outDir, authMode });
 
   res.json(result);
 });
@@ -87,6 +91,7 @@ app.post("/api/deploy", requireAuth, async (req, res) => {
   const spec = req.body?.spec;
   const toolNames: unknown = req.body?.toolNames;
   const credentialValue: unknown = req.body?.credentialValue;
+  const authMode = req.body?.authMode === "passthrough" ? "passthrough" : "static";
 
   if (typeof spec !== "string" || spec.trim() === "") {
     return res.status(400).json({ error: "Missing required field: spec (URL or file path)." });
@@ -108,16 +113,16 @@ app.post("/api/deploy", requireAuth, async (req, res) => {
 
   const apiTitle = validation.document.info?.title ?? "Generated API";
   const apiEnvSlug = envSlug(apiTitle) || "API";
-  const { binding } = deriveAuthBinding(validation.document, apiEnvSlug);
+  const { binding } = deriveAuthBinding(validation.document, apiEnvSlug, { passthrough: authMode === "passthrough" });
 
-  if (binding.kind !== "none" && (typeof credentialValue !== "string" || credentialValue.trim() === "")) {
+  if (binding.kind !== "none" && binding.kind !== "passthrough" && (typeof credentialValue !== "string" || credentialValue.trim() === "")) {
     return res.status(400).json({ error: `This API requires a credential (${binding.envVar}) to deploy.` });
   }
 
   const outDir = path.join(os.tmpdir(), `altship-mcp-deploy-${Date.now()}`);
 
   try {
-    const generated = await generateVercelServer({ document: validation.document, tools, outDir });
+    const generated = await generateVercelServer({ document: validation.document, tools, outDir, authMode });
 
     const files: Record<string, string> = {};
     for (const relativePath of generated.filesWritten) {
@@ -127,7 +132,7 @@ app.post("/api/deploy", requireAuth, async (req, res) => {
     const projectName = `${apiEnvSlug.toLowerCase().replace(/_/g, "-")}-mcp-${randomUUID().slice(0, 8)}`;
     const project = await ensureProject(projectName);
 
-    if (binding.kind !== "none" && typeof credentialValue === "string") {
+    if (binding.envVar && typeof credentialValue === "string") {
       await setProjectEnvVar(project.id, binding.envVar, credentialValue);
     }
 

@@ -32,6 +32,8 @@ export interface ToolsResponse {
   issues: ValidationIssue[];
   tools: ToolDefinition[];
   auth: AuthRequirement | null;
+  /** Whether the spec's auth scheme (http-bearer) supports forwarding each caller's own token instead of one shared credential. */
+  passthroughAvailable: boolean;
 }
 
 export interface GenerateResponse {
@@ -94,13 +96,24 @@ export function importSpec(spec: string): Promise<ToolsResponse> {
 }
 
 export type Platform = "node" | "vercel";
+export type AuthMode = "static" | "passthrough";
 
-export function generateServer(spec: string, toolNames: string[], platform: Platform): Promise<GenerateResponse> {
-  return postJson<GenerateResponse>("/api/generate", { spec, toolNames, platform });
+export function generateServer(
+  spec: string,
+  toolNames: string[],
+  platform: Platform,
+  authMode: AuthMode = "static",
+): Promise<GenerateResponse> {
+  return postJson<GenerateResponse>("/api/generate", { spec, toolNames, platform, authMode });
 }
 
-export function deployToVercel(spec: string, toolNames: string[], credentialValue?: string): Promise<DeployResponse> {
-  return postJson<DeployResponse>("/api/deploy", { spec, toolNames, credentialValue });
+export function deployToVercel(
+  spec: string,
+  toolNames: string[],
+  authMode: AuthMode = "static",
+  credentialValue?: string,
+): Promise<DeployResponse> {
+  return postJson<DeployResponse>("/api/deploy", { spec, toolNames, authMode, credentialValue });
 }
 
 export function listDeployments(): Promise<DeploymentRecord[]> {

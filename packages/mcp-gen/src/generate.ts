@@ -31,6 +31,8 @@ export interface GenerateOptions {
   document: OpenAPIV3.Document;
   tools: ToolDefinition[];
   outDir: string;
+  /** Forward each caller's own bearer token to the upstream API instead of one shared credential. Only takes effect for http-bearer schemes. */
+  authMode?: "static" | "passthrough";
 }
 
 export interface GenerateResult {
@@ -48,14 +50,14 @@ interface DerivedMeta {
   warnings: string[];
 }
 
-function deriveMeta(document: OpenAPIV3.Document): DerivedMeta {
+function deriveMeta(document: OpenAPIV3.Document, authMode?: "static" | "passthrough"): DerivedMeta {
   const apiTitle = document.info?.title ?? "Generated API";
   const pkgSlug = slugify(apiTitle) || "generated-api";
   const apiEnvSlug = envSlug(apiTitle) || "API";
   const baseUrlEnvVar = `${apiEnvSlug}_BASE_URL`;
   const defaultBaseUrl = document.servers?.[0]?.url ?? "https://api.example.com";
 
-  const { binding, warning } = deriveAuthBinding(document, apiEnvSlug);
+  const { binding, warning } = deriveAuthBinding(document, apiEnvSlug, { passthrough: authMode === "passthrough" });
 
   return { apiTitle, pkgSlug, baseUrlEnvVar, defaultBaseUrl, binding, warnings: warning ? [warning] : [] };
 }
@@ -73,8 +75,8 @@ async function writeFiles(outDir: string, files: Record<string, string>): Promis
 
 /** Generates a self-contained Node server: stdio by default, or Streamable HTTP when run with MCP_TRANSPORT=http (e.g. in a container). */
 export async function generateServer(options: GenerateOptions): Promise<GenerateResult> {
-  const { document, tools, outDir } = options;
-  const { apiTitle, pkgSlug, baseUrlEnvVar, defaultBaseUrl, binding, warnings } = deriveMeta(document);
+  const { document, tools, outDir, authMode } = options;
+  const { apiTitle, pkgSlug, baseUrlEnvVar, defaultBaseUrl, binding, warnings } = deriveMeta(document, authMode);
 
   const files: Record<string, string> = {
     "package.json": packageJsonTemplate(`${pkgSlug}-mcp`),
@@ -98,8 +100,8 @@ export async function generateServer(options: GenerateOptions): Promise<Generate
 
 /** Generates a Vercel-deployable project: api/mcp.ts + api/health.ts as serverless functions, sharing lib/ with the Node target's logic. */
 export async function generateVercelServer(options: GenerateOptions): Promise<GenerateResult> {
-  const { document, tools, outDir } = options;
-  const { apiTitle, pkgSlug, baseUrlEnvVar, defaultBaseUrl, binding, warnings } = deriveMeta(document);
+  const { document, tools, outDir, authMode } = options;
+  const { apiTitle, pkgSlug, baseUrlEnvVar, defaultBaseUrl, binding, warnings } = deriveMeta(document, authMode);
 
   const files: Record<string, string> = {
     "package.json": vercelPackageJsonTemplate(`${pkgSlug}-mcp`),

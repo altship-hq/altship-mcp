@@ -69,13 +69,25 @@ export function assertAuthConfigured(): void {
 `;
 
   const footer = `
-export function applyAuth(url: URL, headers: Record<string, string>): void {
+/**
+ * Applies auth to an outgoing request. \`callerToken\` is the bearer token the
+ * MCP client sent with this specific call (from RequestHandlerExtra.authInfo)
+ * -- only used in "passthrough" mode, where each end-user's own token is
+ * forwarded to the upstream API instead of a single shared server-side
+ * credential. We don't validate it ourselves; the upstream API does, exactly
+ * as it would if the caller had hit it directly.
+ */
+export function applyAuth(url: URL, headers: Record<string, string>, callerToken?: string): void {
 ${applyBody(binding)}
 }
 `;
 
-  if (binding.kind === "none") {
-    return `${header}  // No supported auth scheme was found in the source spec; requests are unauthenticated.\n}\n${footer}`;
+  if (binding.kind === "none" || binding.kind === "passthrough") {
+    const comment =
+      binding.kind === "passthrough"
+        ? "  // Passthrough auth: nothing to configure server-side, the caller supplies their own token per request."
+        : "  // No supported auth scheme was found in the source spec; requests are unauthenticated.";
+    return `${header}${comment}\n}\n${footer}`;
   }
 
   return `${header}  if (!process.env.${binding.envVar}) {
@@ -98,6 +110,11 @@ function applyBody(binding: AuthBinding): string {
     case "basic": {
       return `  headers["authorization"] = \`Basic \${Buffer.from(process.env.${binding.envVar}!).toString("base64")}\`;`;
     }
+    case "passthrough":
+      return `  if (!callerToken) {
+    throw new Error("This tool requires the caller's own bearer token, but none was provided with the request.");
+  }
+  headers["authorization"] = \`Bearer \${callerToken}\`;`;
     case "none":
     default:
       return "  // no-op";
@@ -259,7 +276,11 @@ export interface ExecutionResult {
  * parameter map, then normalizes the response. Credentials are applied
  * here and never appear in the returned result, logs, or thrown errors.
  */
-export async function executeTool(tool: GeneratedTool, args: Record<string, unknown>): Promise<ExecutionResult> {
+export async function executeTool(
+  tool: GeneratedTool,
+  args: Record<string, unknown>,
+  callerToken?: string,
+): Promise<ExecutionResult> {
   let path = tool.path;
   const query = new URLSearchParams();
   const bodyFields: Record<string, unknown> = {};
@@ -287,7 +308,7 @@ export async function executeTool(tool: GeneratedTool, args: Record<string, unkn
   query.forEach((v, k) => finalUrl.searchParams.set(k, v));
 
   const headers: Record<string, string> = { accept: "application/json" };
-  applyAuth(finalUrl, headers);
+  applyAuth(finalUrl, headers, callerToken);
 
   let body: string | undefined;
   if (hasBody) {
@@ -345,8 +366,12 @@ export function createMcpServer(): Server {
     })),
   }));
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const { name, arguments: args } = request.params;
+    // Only populated over Streamable HTTP when the transport attached an
+    // incoming Authorization header (see server.ts / api/mcp.ts) -- this is
+    // the calling end-user's own token in "passthrough" auth mode.
+    const callerToken = extra.authInfo?.token;
     const tool = TOOLS.find((t) => t.name === name);
 
     if (!tool) {
@@ -360,7 +385,7 @@ export function createMcpServer(): Server {
     }
 
     try {
-      const result = await executeTool(tool, (args ?? {}) as Record<string, unknown>);
+      const result = await executeTool(tool, (args ?? {}) as Record<string, unknown>, callerToken);
       const text =
         result.ok && (result.body === null || result.body === undefined)
           ? \`OK (\${result.status})\`
@@ -378,6 +403,20 @@ export function createMcpServer(): Server {
 
   return server;
 }
+
+/**
+ * Builds the SDK's AuthInfo shape from a raw "Authorization: Bearer <token>"
+ * header, so it can be attached to the incoming request as \`req.auth\` before
+ * handing off to the transport -- the SDK then surfaces it to every tool
+ * call as \`extra.authInfo\`. We don't verify the token (see auth.ts); this
+ * just carries it through unchanged for "passthrough" mode to relay.
+ */
+export function parseBearerToken(authorizationHeader: string | string[] | undefined) {
+  const header = Array.isArray(authorizationHeader) ? authorizationHeader[0] : authorizationHeader;
+  const match = header?.match(/^Bearer\\s+(.+)$/i);
+  if (!match) return undefined;
+  return { token: match[1], clientId: "passthrough", scopes: [] };
+}
 `;
 }
 
@@ -386,7 +425,7 @@ export function serverTemplate(): string {
 import http from "node:http";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { createMcpServer } from "./mcp-factory.js";
+import { createMcpServer, parseBearerToken } from "./mcp-factory.js";
 import { assertAuthConfigured } from "./auth.js";
 import { DOCS_HTML } from "./docs.js";
 
@@ -436,6 +475,7 @@ function startHttpServer(port: number): void {
         server.close();
       });
       await server.connect(transport);
+      (req as typeof req & { auth?: unknown }).auth = parseBearerToken(req.headers.authorization);
       await transport.handleRequest(req, res);
     } catch (err) {
       console.error("Error handling MCP request:", err);
@@ -470,7 +510,7 @@ export function vercelMcpHandlerTemplate(): string {
   return `// Generated by altship-mcp. Do not hand-edit — regenerate from the source spec instead.
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { createMcpServer } from "../lib/mcp-factory.js";
+import { createMcpServer, parseBearerToken } from "../lib/mcp-factory.js";
 import { assertAuthConfigured } from "../lib/auth.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -501,7 +541,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       server.close();
     });
     await server.connect(transport);
-    await transport.handleRequest(req as unknown as import("node:http").IncomingMessage, res as unknown as import("node:http").ServerResponse, req.body);
+    const nodeReq = req as unknown as import("node:http").IncomingMessage & { auth?: unknown };
+    nodeReq.auth = parseBearerToken(req.headers.authorization);
+    await transport.handleRequest(nodeReq, res as unknown as import("node:http").ServerResponse, req.body);
   } catch (err) {
     console.error("Error handling MCP request:", err);
     if (!res.headersSent) {
@@ -569,12 +611,21 @@ export function vercelGitignoreTemplate(): string {
   return "node_modules/\n.vercel/\n.env\n.env.*\n!.env.example\n";
 }
 
-export function vercelReadmeTemplate(apiTitle: string, binding: AuthBinding, toolCount: number): string {
-  const envLines =
-    binding.kind === "none"
-      ? "No credentials required (no supported auth scheme was found in the source spec)."
-      : `\`${binding.envVar}\` — required credential for the upstream API.`;
+function needsEnvVar(binding: AuthBinding): boolean {
+  return binding.kind !== "none" && binding.kind !== "passthrough";
+}
 
+function authDescription(binding: AuthBinding): string {
+  if (binding.kind === "passthrough") {
+    return "None to configure here — each caller forwards their own bearer token, which is relayed to the upstream API as-is.";
+  }
+  if (binding.kind === "none") {
+    return "No credentials required (no supported auth scheme was found in the source spec).";
+  }
+  return `\`${binding.envVar}\` — required credential for the upstream API.`;
+}
+
+export function vercelReadmeTemplate(apiTitle: string, binding: AuthBinding, toolCount: number): string {
   return `# ${apiTitle} MCP Server (Vercel)
 
 Generated by [altship-mcp](https://github.com) from the ${apiTitle} OpenAPI specification. Exposes ${toolCount} tool(s) over MCP via Streamable HTTP, as Vercel serverless functions.
@@ -584,11 +635,10 @@ Generated by [altship-mcp](https://github.com) from the ${apiTitle} OpenAPI spec
 \`\`\`
 npx vercel login          # once, interactively
 npx vercel link           # links this directory to a Vercel project
-npx vercel env add ${binding.kind === "none" ? "<YOUR_BASE_URL_OVERRIDE_IF_NEEDED>" : binding.envVar}
-npx vercel deploy --prod
+${needsEnvVar(binding) ? `npx vercel env add ${binding.envVar}\n` : ""}npx vercel deploy --prod
 \`\`\`
 
-Required environment variables: ${envLines}
+Required environment variables: ${authDescription(binding)}
 
 Your MCP endpoint will be \`https://<your-project>.vercel.app/api/mcp\` (health check at \`/api/health\`). Point any MCP-compatible client that supports Streamable HTTP at that URL.
 `;
@@ -600,7 +650,7 @@ export function envExampleTemplate(binding: AuthBinding, baseUrlEnvVar: string):
     "# MCP_TRANSPORT=http  # default is stdio; set to \"http\" for a hosted deployment",
     "# PORT=8080           # only used when MCP_TRANSPORT=http",
   ];
-  if (binding.kind !== "none") {
+  if (needsEnvVar(binding)) {
     lines.push(`${binding.envVar}=`);
   }
   return lines.join("\n") + "\n";
@@ -637,7 +687,7 @@ Generated by [altship-mcp](https://github.com) from the ${apiTitle} OpenAPI spec
 
 Copy \`.env.example\` to \`.env\` and fill in:
 
-${binding.kind === "none" ? "- No credentials required (no supported auth scheme was found in the source spec)." : `- \`${binding.envVar}\` — required credential for the upstream API.`}
+- ${authDescription(binding)}
 
 ## Run
 

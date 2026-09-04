@@ -6,6 +6,7 @@ import {
   generateServer,
   importSpec,
   listDeployments,
+  type AuthMode,
   type AuthRequirement,
   type DeployResponse,
   type DeploymentRecord,
@@ -55,6 +56,8 @@ function Workspace({ session }: { session: Session }) {
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [platform, setPlatform] = useState<Platform>("node");
   const [authRequirement, setAuthRequirement] = useState<AuthRequirement | null>(null);
+  const [passthroughAvailable, setPassthroughAvailable] = useState(false);
+  const [authMode, setAuthMode] = useState<AuthMode>("static");
   const [credentialValue, setCredentialValue] = useState("");
 
   const [generateResult, setGenerateResult] = useState<GenerateResponse | null>(null);
@@ -63,7 +66,7 @@ function Workspace({ session }: { session: Session }) {
 
   const groups = useMemo(() => groupByNamespace(tools), [tools]);
   const selectedCount = Object.values(selected).filter(Boolean).length;
-  const needsCredential = platform === "vercel" && authRequirement !== null;
+  const needsCredential = platform === "vercel" && authRequirement !== null && authMode === "static";
 
   useEffect(() => {
     refreshDeployments();
@@ -86,6 +89,8 @@ function Workspace({ session }: { session: Session }) {
       setIssues(result.issues);
       setTools(result.tools);
       setAuthRequirement(result.auth);
+      setPassthroughAvailable(result.passthroughAvailable);
+      setAuthMode("static");
 
       const initialSelection: Record<string, boolean> = {};
       for (const tool of result.tools) initialSelection[tool.name] = !tool.destructive;
@@ -108,11 +113,11 @@ function Workspace({ session }: { session: Session }) {
         .map(([name]) => name);
 
       if (platform === "vercel") {
-        const result = await deployToVercel(specInput.trim(), toolNames, credentialValue || undefined);
+        const result = await deployToVercel(specInput.trim(), toolNames, authMode, credentialValue || undefined);
         setDeployResult(result);
         refreshDeployments();
       } else {
-        const result = await generateServer(specInput.trim(), toolNames, platform);
+        const result = await generateServer(specInput.trim(), toolNames, platform, authMode);
         setGenerateResult(result);
       }
       setStep("result");
@@ -132,6 +137,8 @@ function Workspace({ session }: { session: Session }) {
     setTools([]);
     setSelected({});
     setAuthRequirement(null);
+    setPassthroughAvailable(false);
+    setAuthMode("static");
     setCredentialValue("");
     setGenerateResult(null);
     setDeployResult(null);
@@ -238,6 +245,30 @@ function Workspace({ session }: { session: Session }) {
               Vercel (managed — deploys to a live URL)
             </label>
           </div>
+
+          {passthroughAvailable && (
+            <div className="platform-picker">
+              <span className="platform-label">Auth model:</span>
+              <label>
+                <input
+                  type="radio"
+                  name="authMode"
+                  checked={authMode === "static"}
+                  onChange={() => setAuthMode("static")}
+                />
+                Shared credential (one server-side token for every call)
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="authMode"
+                  checked={authMode === "passthrough"}
+                  onChange={() => setAuthMode("passthrough")}
+                />
+                Per-user (forward each caller's own token; no credential needed here)
+              </label>
+            </div>
+          )}
 
           {needsCredential && (
             <div className="credential-field">
