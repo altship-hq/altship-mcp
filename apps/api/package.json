@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "cd ../../packages/openapi && npm run build && cd ../tool-design && npm run build && cd ../mcp-gen && npm run build && cd ../../apps/api && tsc -p tsconfig.json",
     "dev": "tsx watch src/dev-server.ts",
     "start": "node dist/dev-server.js"
   },
