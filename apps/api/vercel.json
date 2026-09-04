@@ -1,4 +1,4 @@
 {
-  "outputDirectory": "apps/api/public",
+  "outputDirectory": "public",
   "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }]
 }
