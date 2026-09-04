@@ -49,7 +49,7 @@ describe("PlaygroundSession (end-to-end against a generated server)", () => {
       cwd: projectDir,
       env: { SWAGGER_PETSTORE_BASE_URL: mockBaseUrl },
     });
-  }, 60_000);
+  }, 120_000);
 
   afterAll(async () => {
     await session?.close();

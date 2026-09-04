@@ -1,19 +1,49 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
+import { supabase } from "./supabase.js";
 import {
   deployToVercel,
   generateServer,
   importSpec,
+  listDeployments,
   type AuthRequirement,
   type DeployResponse,
+  type DeploymentRecord,
   type GenerateResponse,
   type Platform,
   type ToolDefinition,
   type ValidationIssue,
 } from "./api.js";
 
+export default function App() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setCheckingSession(false);
+    });
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+    return () => subscription.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!checkingSession && !session) {
+      const redirect = encodeURIComponent(window.location.href);
+      window.location.href = `${import.meta.env.VITE_LANDING_URL}/?redirect=${redirect}`;
+    }
+  }, [checkingSession, session]);
+
+  if (checkingSession || !session) return null;
+  return <Workspace session={session} />;
+}
+
 type Step = "import" | "select" | "result";
 
-export default function App() {
+function Workspace({ session }: { session: Session }) {
   const [step, setStep] = useState<Step>("import");
   const [specInput, setSpecInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -29,10 +59,23 @@ export default function App() {
 
   const [generateResult, setGenerateResult] = useState<GenerateResponse | null>(null);
   const [deployResult, setDeployResult] = useState<DeployResponse | null>(null);
+  const [deployments, setDeployments] = useState<DeploymentRecord[]>([]);
 
   const groups = useMemo(() => groupByNamespace(tools), [tools]);
   const selectedCount = Object.values(selected).filter(Boolean).length;
   const needsCredential = platform === "vercel" && authRequirement !== null;
+
+  useEffect(() => {
+    refreshDeployments();
+  }, []);
+
+  async function refreshDeployments() {
+    try {
+      setDeployments(await listDeployments());
+    } catch {
+      // Non-fatal: the main flow doesn't depend on deployment history loading.
+    }
+  }
 
   async function handleImport() {
     setLoading(true);
@@ -67,6 +110,7 @@ export default function App() {
       if (platform === "vercel") {
         const result = await deployToVercel(specInput.trim(), toolNames, credentialValue || undefined);
         setDeployResult(result);
+        refreshDeployments();
       } else {
         const result = await generateServer(specInput.trim(), toolNames, platform);
         setGenerateResult(result);
@@ -95,9 +139,23 @@ export default function App() {
 
   return (
     <div className="page">
-      <header>
-        <h1>AltShip MCP</h1>
-        <p className="subtitle">Turn an OpenAPI spec into a production-ready MCP server.</p>
+      <header className="app-header">
+        <div>
+          <h1>AltShip MCP</h1>
+          <p className="subtitle">Turn an OpenAPI spec into a production-ready MCP server.</p>
+        </div>
+        <div className="account">
+          <span>{session.user.email}</span>
+          <button
+            className="secondary"
+            onClick={async () => {
+              await supabase.auth.signOut();
+              window.location.href = import.meta.env.VITE_LANDING_URL;
+            }}
+          >
+            Sign out
+          </button>
+        </div>
       </header>
 
       {errorMessage && <div className="banner error">{errorMessage}</div>}
@@ -266,6 +324,25 @@ export default function App() {
               Start over
             </button>
           </div>
+        </section>
+      )}
+
+      {step === "import" && deployments.length > 0 && (
+        <section className="card">
+          <h2>Your MCPs</h2>
+          <ul className="deployment-list">
+            {deployments.map((d) => (
+              <li key={d.id}>
+                <div>
+                  <strong>{d.apiTitle}</strong> — {d.toolNames.length} tool(s)
+                </div>
+                <a href={d.url} target="_blank" rel="noreferrer">
+                  {d.url}
+                </a>
+                <span className="deployment-date">{new Date(d.createdAt).toLocaleString()}</span>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
     </div>

@@ -8,3 +8,5 @@ build/
 .DS_Store
 coverage/
 apps/api/data/
+.vercel
+.env*

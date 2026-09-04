@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express from "express";
+import cors from "cors";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -9,8 +10,14 @@ import { designTools } from "@altship/tool-design";
 import { generateServer, generateVercelServer, deriveAuthBinding, envSlug } from "@altship/mcp-gen";
 import { ensureProject, setProjectEnvVar, deployFiles, VercelConfigError } from "./vercel-client.js";
 import { recordDeployment, listDeployments } from "./store.js";
+import { requireAuth } from "./auth-middleware.js";
 
-const app = express();
+const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "http://localhost:5173")
+  .split(",")
+  .map((o) => o.trim());
+
+export const app = express();
+app.use(cors({ origin: allowedOrigins }));
 app.use(express.json());
 
 app.get("/api/health", (_req, res) => {
@@ -41,7 +48,7 @@ app.post("/api/tools", async (req, res) => {
   });
 });
 
-app.post("/api/generate", async (req, res) => {
+app.post("/api/generate", requireAuth, async (req, res) => {
   const spec = req.body?.spec;
   const toolNames: unknown = req.body?.toolNames;
   const platform = req.body?.platform === "vercel" ? "vercel" : "node";
@@ -72,11 +79,11 @@ app.post("/api/generate", async (req, res) => {
   res.json(result);
 });
 
-app.get("/api/deployments", async (_req, res) => {
-  res.json(await listDeployments());
+app.get("/api/deployments", requireAuth, async (req, res) => {
+  res.json(await listDeployments(req.userId!));
 });
 
-app.post("/api/deploy", async (req, res) => {
+app.post("/api/deploy", requireAuth, async (req, res) => {
   const spec = req.body?.spec;
   const toolNames: unknown = req.body?.toolNames;
   const credentialValue: unknown = req.body?.credentialValue;
@@ -128,7 +135,7 @@ app.post("/api/deploy", async (req, res) => {
 
     const record = {
       id: deployment.id,
-      createdAt: new Date().toISOString(),
+      userId: req.userId!,
       apiTitle,
       toolNames: tools.map((t) => t.name),
       projectName: project.name,
@@ -137,7 +144,7 @@ app.post("/api/deploy", async (req, res) => {
     };
     await recordDeployment(record);
 
-    res.json({ ...record, warnings: generated.warnings });
+    res.json({ ...record, createdAt: new Date().toISOString(), warnings: generated.warnings });
   } catch (err) {
     if (err instanceof VercelConfigError) {
       return res.status(500).json({ error: err.message });
@@ -149,7 +156,3 @@ app.post("/api/deploy", async (req, res) => {
   }
 });
 
-const port = Number(process.env.PORT ?? 4000);
-app.listen(port, () => {
-  console.log(`altship-mcp API listening on http://localhost:${port}`);
-});

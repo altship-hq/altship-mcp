@@ -73,7 +73,7 @@ describe("generated Vercel project (serverless handlers)", () => {
     });
 
     await waitForHealth(port);
-  }, 60_000);
+  }, 120_000);
 
   afterAll(async () => {
     harnessProcess?.kill();

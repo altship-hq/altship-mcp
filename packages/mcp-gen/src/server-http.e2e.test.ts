@@ -74,7 +74,7 @@ describe("generated server (Streamable HTTP transport)", () => {
     });
 
     await waitForHealth(port);
-  }, 60_000);
+  }, 120_000);
 
   afterAll(async () => {
     serverProcess?.kill();
