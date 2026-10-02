@@ -164,6 +164,136 @@
   color: #111;
 }
 
+.dash .side-site {
+  padding: 0 8px;
+}
+
+/* Profile (foot of the sidebar) */
+
+.dash .profile {
+  position: relative;
+}
+
+.dash .profile-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  font: inherit;
+  color: #111;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dash .profile-button:hover,
+.dash .profile-button:focus-visible,
+.dash .profile-button[aria-expanded="true"] {
+  background: #efefef;
+}
+
+.dash .profile-avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: #111;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.dash .profile-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.dash .profile-text {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+
+.dash .profile-name,
+.dash .profile-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash .profile-name {
+  font-size: 13px;
+}
+
+.dash .profile-email {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dash .profile-chevron {
+  flex: none;
+  color: var(--muted);
+}
+
+.dash .profile-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 20;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+}
+
+.dash .profile-menu-head {
+  display: grid;
+  gap: 2px;
+  padding: 8px 8px 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.dash .profile-menu-head strong {
+  font-weight: 500;
+}
+
+.dash .profile-menu-head span {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.dash .profile-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  background: none;
+  border: 0;
+  border-radius: 3px;
+  font: inherit;
+  font-size: 13px;
+  color: #111;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dash .profile-menu button:hover,
+.dash .profile-menu button:focus-visible {
+  background: #f2f2f2;
+}
+
 /* Top bar */
 
 .dash .main {
@@ -213,36 +343,6 @@
   font-size: 12px;
   border-radius: 2px;
   white-space: nowrap;
-}
-
-.dash .account {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  min-width: 0;
-  font-size: 12px;
-}
-
-.dash .account-email {
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dash .account-signout {
-  background: none;
-  border: 1px solid var(--line);
-  border-radius: 2px;
-  padding: 6px 10px;
-  font: inherit;
-  color: #111;
-  cursor: pointer;
-}
-
-.dash .account-signout:hover,
-.dash .account-signout:focus-visible {
-  border-color: #111;
 }
 
 /* Content */
@@ -532,8 +632,33 @@
   .dash .side-brand span,
   .dash .side-label,
   .dash .side-soon,
-  .dash .side-foot {
+  .dash .side-site,
+  .dash .profile-text,
+  .dash .profile-chevron {
     display: none;
+  }
+
+  .dash .side-foot {
+    position: sticky;
+    right: 0;
+    z-index: 30;
+    margin: 0 0 0 auto;
+    padding: 0 0 0 8px;
+    border-top: 0;
+    background: #fafafa;
+  }
+
+  .dash .profile-button {
+    padding: 4px;
+  }
+
+  .dash .profile-menu {
+    position: fixed;
+    top: 68px;
+    right: 16px;
+    left: auto;
+    bottom: auto;
+    width: min(280px, calc(100vw - 32px));
   }
 
   .dash .side-nav,

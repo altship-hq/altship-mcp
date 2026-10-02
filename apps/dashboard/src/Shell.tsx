@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { signOut } from "./auth.js";
+import Profile from "./Profile.js";
 import { Icon, PRODUCTS } from "./products.js";
 import { Link } from "./router.js";
 import Home from "./Home.js";
@@ -74,7 +74,10 @@ export default function Shell({ path, session }: { path: string; session: Sessio
         </nav>
 
         <div className="side-foot">
-          <a href="https://altship.io">altship.io ↗</a>
+          <a className="side-site" href="https://altship.io">
+            altship.io ↗
+          </a>
+          <Profile user={session.user} />
         </div>
       </aside>
 
@@ -94,14 +97,6 @@ export default function Shell({ path, session }: { path: string; session: Sessio
                 <strong>{isHome ? "Home" : page!.label}</strong>
               </>
             )}
-          </div>
-          <div className="account">
-            <span className="account-email" title={session.user.email}>
-              {session.user.email}
-            </span>
-            <button type="button" className="account-signout" onClick={() => signOut()}>
-              Sign out
-            </button>
           </div>
         </header>
 
