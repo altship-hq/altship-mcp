@@ -29,9 +29,10 @@ export interface DeriveAuthOptions {
 
 /**
  * V1 supports exactly one auth scheme per generated server (apiKey or
- * bearer/basic http auth) — the first one referenced by the spec's global
- * `security` requirement, falling back to the first securityScheme defined
- * at all. Multi-scheme specs fall back to "none" with a warning.
+ * bearer/basic http auth). It's the first *supported* scheme found, in order
+ * of preference: the spec's global `security` requirement, then the schemes
+ * operations require, then any scheme defined at all -- so a spec that also
+ * offers an unsupported scheme (e.g. OAuth2 alongside an API key) still works.
  */
 export function deriveAuthBinding(
   document: OpenAPIV3.Document,
@@ -42,10 +43,20 @@ export function deriveAuthBinding(
   warning?: string;
 } {
   const schemes = document.components?.securitySchemes ?? {};
-  const globalRequirement = document.security?.[0];
-  const preferredName = globalRequirement ? Object.keys(globalRequirement)[0] : undefined;
-
-  const schemeName = preferredName && schemes[preferredName] ? preferredName : Object.keys(schemes)[0];
+  const candidates = [
+    ...(document.security ?? []).flatMap((requirement) => Object.keys(requirement)),
+    ...Object.values(document.paths ?? {}).flatMap((item) =>
+      Object.values(item ?? {}).flatMap((op) =>
+        op && typeof op === "object" && "security" in op && Array.isArray(op.security) ? op.security.flatMap((r) => Object.keys(r)) : [],
+      ),
+    ),
+    ...Object.keys(schemes),
+  ];
+  const isSupported = (name: string) => {
+    const s = schemes[name];
+    return !!s && !("$ref" in s) && (s.type === "apiKey" || (s.type === "http" && (s.scheme === "bearer" || s.scheme === "basic")));
+  };
+  const schemeName = candidates.find(isSupported) ?? candidates.find((name) => schemes[name]);
   const scheme = schemeName ? schemes[schemeName] : undefined;
 
   if (!scheme || "$ref" in scheme) {
