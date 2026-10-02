@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type DragEvent } from "react";
 import {
   deployToVercel,
   generateServer,
@@ -9,17 +9,25 @@ import {
   type DeployResponse,
   type GenerateResponse,
   type Platform,
+  type SpecSource,
   type ToolDefinition,
   type ValidationIssue,
 } from "./api.js";
 import { ConnectPanel } from "./Access.js";
+
+/** Matches the API's limit for uploaded specs. */
+const MAX_SPEC_BYTES = 5 * 1024 * 1024;
 
 type Step = "import" | "select" | "result";
 
 /** The spec → tools → generate/deploy flow. Rendered on MCP Creator's "New server" page. */
 export default function Builder({ onDeployed }: { onDeployed?: (deployment: DeployResponse) => void }) {
   const [step, setStep] = useState<Step>("import");
+  const [specMode, setSpecMode] = useState<"url" | "file">("url");
   const [specInput, setSpecInput] = useState("");
+  const [specFile, setSpecFile] = useState<{ fileName: string; content: string } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -51,11 +59,31 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
   const customersAvailable = authRequirement !== null;
   const needsCredential = platform === "vercel" && !forCustomers && authRequirement !== null && authMode === "static";
 
+  /** The spec to send: the URL typed in, or the file picked. Null until one is given. */
+  const specSource: SpecSource | null =
+    specMode === "url" ? (specInput.trim() ? { url: specInput.trim() } : null) : specFile;
+
+  async function pickFile(file: File | undefined) {
+    if (!file) return;
+    setErrorMessage(null);
+    if (file.size > MAX_SPEC_BYTES) {
+      setErrorMessage(`${file.name} is larger than 5 MB.`);
+      return;
+    }
+    setSpecFile({ fileName: file.name, content: await file.text() });
+  }
+
+  function onDrop(e: DragEvent) {
+    e.preventDefault();
+    setDragging(false);
+    pickFile(e.dataTransfer.files[0]);
+  }
+
   async function handleImport() {
     setLoading(true);
     setErrorMessage(null);
     try {
-      const result = await importSpec(specInput.trim());
+      const result = await importSpec(specSource!);
       setApiTitle(result.apiTitle);
       setIssues(result.issues);
       setTools(result.tools);
@@ -84,7 +112,7 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
         .map(([name]) => name);
 
       if (platform === "vercel") {
-        const result = await deployToVercel(specInput.trim(), toolNames, {
+        const result = await deployToVercel(specSource!, toolNames, {
           authMode: forCustomers ? "static" : authMode,
           credentialValue: forCustomers ? undefined : credentialValue || undefined,
           audience: forCustomers ? "customers" : "private",
@@ -93,7 +121,7 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
         setDeployResult(result);
         onDeployed?.(result);
       } else {
-        const result = await generateServer(specInput.trim(), toolNames, platform, authMode);
+        const result = await generateServer(specSource!, toolNames, platform, authMode);
         setGenerateResult(result);
       }
       setStep("result");
@@ -115,6 +143,7 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
   function reset() {
     setStep("import");
     setSpecInput("");
+    setSpecFile(null);
     setErrorMessage(null);
     setApiTitle(null);
     setIssues([]);
@@ -135,15 +164,75 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
 
       {step === "import" && (
         <section className="card">
-          <label htmlFor="spec">OpenAPI spec URL or file path</label>
-          <input
-            id="spec"
-            value={specInput}
-            onChange={(e) => setSpecInput(e.target.value)}
-            placeholder="https://api.example.com/openapi.json or /path/to/openapi.yaml"
-            onKeyDown={(e) => e.key === "Enter" && !loading && specInput.trim() && handleImport()}
-          />
-          <button disabled={loading || !specInput.trim()} onClick={handleImport}>
+          <div className="spec-tabs" role="tablist" aria-label="Where's your spec?">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={specMode === "url"}
+              className={specMode === "url" ? "active" : ""}
+              onClick={() => setSpecMode("url")}
+            >
+              From a URL
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={specMode === "file"}
+              className={specMode === "file" ? "active" : ""}
+              onClick={() => setSpecMode("file")}
+            >
+              Upload a file
+            </button>
+          </div>
+
+          {specMode === "url" ? (
+            <>
+              <label htmlFor="spec">OpenAPI spec URL</label>
+              <input
+                id="spec"
+                value={specInput}
+                onChange={(e) => setSpecInput(e.target.value)}
+                placeholder="https://api.example.com/openapi.json"
+                onKeyDown={(e) => e.key === "Enter" && !loading && specSource && handleImport()}
+              />
+            </>
+          ) : (
+            <div
+              className={`spec-drop${dragging ? " dragging" : ""}`}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={onDrop}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".yaml,.yml,.json,application/json,application/yaml,text/yaml"
+                hidden
+                onChange={(e) => pickFile(e.target.files?.[0])}
+              />
+              {specFile ? (
+                <p>
+                  <strong>{specFile.fileName}</strong> · {(specFile.content.length / 1024).toFixed(0)} KB{" "}
+                  <button type="button" className="link" onClick={() => fileInputRef.current?.click()}>
+                    Choose another
+                  </button>
+                </p>
+              ) : (
+                <p>
+                  Drop your <code>openapi.yaml</code> or <code>.json</code> here, or{" "}
+                  <button type="button" className="link" onClick={() => fileInputRef.current?.click()}>
+                    choose a file
+                  </button>
+                  .
+                </p>
+              )}
+            </div>
+          )}
+
+          <button disabled={loading || !specSource} onClick={handleImport}>
             {loading ? "Importing…" : "Import"}
           </button>
 

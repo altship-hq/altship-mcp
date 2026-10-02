@@ -573,3 +573,56 @@ button.link {
   text-transform: uppercase;
   vertical-align: 2px;
 }
+
+.dash .builder .spec-tabs {
+  display: inline-flex;
+  margin-bottom: 16px;
+  border: 1px solid var(--line, #e8e8e8);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.dash .builder .spec-tabs button {
+  padding: 7px 14px;
+  background: #fff;
+  color: #595959;
+  border: 0;
+  border-radius: 0;
+  font-size: 12px;
+}
+
+.dash .builder .spec-tabs button + button {
+  border-left: 1px solid var(--line, #e8e8e8);
+}
+
+.dash .builder .spec-tabs button.active {
+  background: #111;
+  color: #fff;
+}
+
+.dash .builder .spec-drop {
+  display: grid;
+  place-items: center;
+  min-height: 110px;
+  margin-bottom: 14px;
+  padding: 20px;
+  border: 1px dashed #c8c8c8;
+  border-radius: 4px;
+  background: #fafafa;
+  text-align: center;
+  font-size: 13px;
+  color: #595959;
+}
+
+.dash .builder .spec-drop.dragging {
+  border-color: #111;
+  background: #f2f2f2;
+}
+
+.dash .builder .spec-drop p {
+  margin: 0;
+}
+
+.dash .builder .spec-drop strong {
+  color: #111;
+}

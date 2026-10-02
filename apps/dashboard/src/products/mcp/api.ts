@@ -84,8 +84,15 @@ export interface AccessKey {
   revokedAt: string | null;
 }
 
-export function importSpec(spec: string): Promise<ToolsResponse> {
-  return postJson<ToolsResponse>("/api/tools", { spec });
+/** Where the OpenAPI spec comes from: a public URL, or a file the user picked (read in the browser). */
+export type SpecSource = { url: string } | { fileName: string; content: string };
+
+function specBody(source: SpecSource) {
+  return "url" in source ? { spec: source.url } : { specContent: source.content };
+}
+
+export function importSpec(source: SpecSource): Promise<ToolsResponse> {
+  return postJson<ToolsResponse>("/api/tools", specBody(source));
 }
 
 export type Platform = "node" | "vercel";
@@ -94,20 +101,20 @@ export type AuthMode = "static" | "passthrough";
 export type Audience = "private" | "customers";
 
 export function generateServer(
-  spec: string,
+  source: SpecSource,
   toolNames: string[],
   platform: Platform,
   authMode: AuthMode = "static",
 ): Promise<GenerateResponse> {
-  return postJson<GenerateResponse>("/api/generate", { spec, toolNames, platform, authMode });
+  return postJson<GenerateResponse>("/api/generate", { ...specBody(source), toolNames, platform, authMode });
 }
 
 export function deployToVercel(
-  spec: string,
+  source: SpecSource,
   toolNames: string[],
   options: { authMode?: AuthMode; credentialValue?: string; audience?: Audience; connectHelpText?: string } = {},
 ): Promise<DeployResponse> {
-  return postJson<DeployResponse>("/api/deploy", { spec, toolNames, ...options });
+  return postJson<DeployResponse>("/api/deploy", { ...specBody(source), toolNames, ...options });
 }
 
 export function listDeployments(): Promise<DeploymentRecord[]> {

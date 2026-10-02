@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
-import { validateSpec } from "@altship/openapi";
+import { validateSpec, type SpecInput } from "@altship/openapi";
 import { designTools } from "@altship/tool-design";
 import { generateServer, generateVercelServer, deriveAuthBinding, envSlug } from "@altship/mcp-gen";
 import { ensureProject, setProjectEnvVar, assignMcpSubdomain, deployFiles, redeploy, VercelConfigError } from "./vercel-client.js";
@@ -31,8 +31,22 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "http://localhost:5173")
   .split(",")
   .map((o) => o.trim());
 
+const SPEC_REQUIRED = "Provide the spec as a public URL (spec) or the file's contents (specContent).";
+
+/**
+ * The OpenAPI spec from a request: uploaded file contents (specContent) or a
+ * public URL (spec). Parsed with { untrusted: true }, so it can never read
+ * files on this server or reach private-network addresses.
+ */
+function specInput(body: Record<string, unknown> | undefined): SpecInput | null {
+  if (typeof body?.specContent === "string" && body.specContent.trim()) return { content: body.specContent };
+  if (typeof body?.spec === "string" && body.spec.trim()) return body.spec.trim();
+  return null;
+}
+
 export const app = express();
-app.use(express.json());
+// Uploaded OpenAPI specs travel in the JSON body, so allow large ones.
+app.use(express.json({ limit: "6mb" }));
 app.use(express.urlencoded({ extended: false }));
 // The end-user sign-in server (public, its own CORS) comes before the
 // dashboard API's origin-restricted CORS.
@@ -49,12 +63,10 @@ app.use("/api/agents", agentsRouter, agentsErrorHandler);
 app.use(["/api/tools", "/api/generate", "/api/deployments", "/api/deploy"], requireAuth);
 
 app.post("/api/tools", async (req, res) => {
-  const spec = req.body?.spec;
-  if (typeof spec !== "string" || spec.trim() === "") {
-    return res.status(400).json({ error: "Missing required field: spec (URL or file path)." });
-  }
+  const spec = specInput(req.body);
+  if (!spec) return res.status(400).json({ error: SPEC_REQUIRED });
 
-  const validation = await validateSpec(spec);
+  const validation = await validateSpec(spec, { untrusted: true });
   if (!validation.document) {
     return res.json({ valid: false, apiTitle: null, issues: validation.issues, tools: [], auth: null });
   }
@@ -76,19 +88,17 @@ app.post("/api/tools", async (req, res) => {
 });
 
 app.post("/api/generate", async (req, res) => {
-  const spec = req.body?.spec;
+  const spec = specInput(req.body);
   const toolNames: unknown = req.body?.toolNames;
   const platform = req.body?.platform === "vercel" ? "vercel" : "node";
   const authMode = req.body?.authMode === "passthrough" ? "passthrough" : "static";
 
-  if (typeof spec !== "string" || spec.trim() === "") {
-    return res.status(400).json({ error: "Missing required field: spec (URL or file path)." });
-  }
+  if (!spec) return res.status(400).json({ error: SPEC_REQUIRED });
   if (!Array.isArray(toolNames) || toolNames.some((n) => typeof n !== "string")) {
     return res.status(400).json({ error: "toolNames must be an array of strings." });
   }
 
-  const validation = await validateSpec(spec);
+  const validation = await validateSpec(spec, { untrusted: true });
   if (!validation.document) {
     return res.status(422).json({ error: "Spec failed to validate.", issues: validation.issues });
   }
@@ -112,14 +122,12 @@ app.get("/api/deployments", async (req, res) => {
 });
 
 app.post("/api/deploy", async (req, res) => {
-  const spec = req.body?.spec;
+  const spec = specInput(req.body);
   const toolNames: unknown = req.body?.toolNames;
   const credentialValue: unknown = req.body?.credentialValue;
   const authMode: "static" | "passthrough" = req.body?.authMode === "passthrough" ? "passthrough" : "static";
 
-  if (typeof spec !== "string" || spec.trim() === "") {
-    return res.status(400).json({ error: "Missing required field: spec (URL or file path)." });
-  }
+  if (!spec) return res.status(400).json({ error: SPEC_REQUIRED });
   if (!Array.isArray(toolNames) || toolNames.some((n) => typeof n !== "string")) {
     return res.status(400).json({ error: "toolNames must be an array of strings." });
   }
@@ -132,7 +140,7 @@ app.post("/api/deploy", async (req, res) => {
     throw err;
   }
 
-  const validation = await validateSpec(spec);
+  const validation = await validateSpec(spec, { untrusted: true });
   if (!validation.document) {
     return res.status(422).json({ error: "Spec failed to validate.", issues: validation.issues });
   }

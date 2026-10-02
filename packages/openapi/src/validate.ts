@@ -1,9 +1,9 @@
-import { parseSpec } from "./parse.js";
+import { parseSpec, type ParseOptions, type SpecInput } from "./parse.js";
 import { checkQuality } from "./quality.js";
 import type { ValidationResult } from "./types.js";
 
-export async function validateSpec(pathOrUrl: string): Promise<ValidationResult> {
-  const { document, issues } = await parseSpec(pathOrUrl);
+export async function validateSpec(input: SpecInput, options: ParseOptions = {}): Promise<ValidationResult> {
+  const { document, issues } = await parseSpec(input, options);
 
   if (!document) {
     return { valid: false, issues };
