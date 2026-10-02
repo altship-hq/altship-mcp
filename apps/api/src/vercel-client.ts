@@ -138,6 +138,21 @@ export async function deployFiles(
   return { id: deployment.id, url: url ?? `https://${deployment.url}`, readyState: finalState };
 }
 
+/**
+ * Rebuilds a project's production deployment from an earlier deployment's
+ * files, so changed env vars (e.g. its access keys) take effect. Doesn't wait
+ * for it to finish -- the old deployment keeps serving until the new one is ready.
+ */
+export async function redeploy(project: VercelProject, fromDeploymentId: string): Promise<void> {
+  const res = await vercelFetch(`/v13/deployments`, {
+    method: "POST",
+    body: JSON.stringify({ name: project.name, project: project.id, target: "production", deploymentId: fromDeploymentId }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to redeploy "${project.name}": ${res.status} ${await res.text()}`);
+  }
+}
+
 async function getProductionDomain(projectId: string): Promise<string | undefined> {
   const res = await vercelFetch(`/v9/projects/${projectId}/domains`);
   if (!res.ok) return undefined;

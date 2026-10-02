@@ -5,9 +5,19 @@ import { PlanError, validatePlan, type AgentPlan } from "@altship/agent-design";
 import { AgentConfigError } from "./anthropic.js";
 import { loadCatalog, toToolCatalog } from "./catalog.js";
 import { planAgent, PlannerError } from "./planner.js";
-import { confirmToolCall, createManagedAgents, followSession, sendUserMessage, startSession } from "./runtime.js";
+import { confirmToolCall, createAgentVault, createManagedAgents, followSession, sendUserMessage, startSession } from "./runtime.js";
 import { requireAuth, userIdOf } from "../auth.js";
-import { getAgent, getRun, insertAgent, insertRun, listAgents, listRuns, updateRun, type AgentRecord } from "./store.js";
+import {
+  getAgent,
+  getRun,
+  insertAgent,
+  insertRun,
+  listAgents,
+  listRuns,
+  setAgentVault,
+  updateRun,
+  type AgentRecord,
+} from "./store.js";
 
 // Agent Creator API. Dashboard routes need a signed-in user and only see that
 // user's agents. The deployed-endpoint routes (/:id/run, /:id/runs/:sid...)
@@ -57,8 +67,10 @@ agentsRouter.post("/", async (req, res) => {
   const plan = validatePlan(req.body?.plan, catalog);
 
   const { coordinator, specialists } = await createManagedAgents(plan, catalog);
+  const id = `agt_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+  const vaultId = await createAgentVault(id, servers);
   const record = await insertAgent({
-    id: `agt_${randomUUID().replace(/-/g, "").slice(0, 16)}`,
+    id,
     userId: userIdOf(req),
     name: plan.name,
     description: plan.description,
@@ -66,6 +78,7 @@ agentsRouter.post("/", async (req, res) => {
     coordinatorAgentId: coordinator.id,
     coordinatorVersion: coordinator.version,
     specialistAgentIds: specialists,
+    vaultId,
   });
   res.status(201).json(record);
 });
@@ -89,7 +102,7 @@ agentsRouter.get("/:id/runs", async (req, res) => {
 agentsRouter.post("/:id/sessions", async (req, res) => {
   const agent = await requireAgent(req, res);
   if (!agent) return;
-  const sessionId = await startSession(agent, `${agent.name} — playground`);
+  const sessionId = await startSession(await withVault(agent), `${agent.name} — playground`);
   res.status(201).json({ sessionId });
 });
 
@@ -157,7 +170,7 @@ agentsRouter.post("/:id/run", async (req, res) => {
   const input = typeof req.body?.input === "string" ? req.body.input.trim() : "";
   if (!input) return res.status(400).json({ error: 'Body must be JSON with an "input" string.' });
 
-  const sessionId = await startSession(agent, `${agent.name} — API run`);
+  const sessionId = await startSession(await withVault(agent), `${agent.name} — API run`);
   await insertRun({ sessionId, agentId: agent.id, source: "endpoint", input });
   const tracker = await followSession(sessionId, { maxMs: RUN_WAIT_MS, afterStreamOpen: () => sendUserMessage(sessionId, input) });
   res.json(await runResponse(sessionId, tracker));
@@ -198,6 +211,15 @@ async function runResponse(sessionId: string, tracker: Awaited<ReturnType<typeof
     output: tracker.status === "completed" ? tracker.reply : null,
     pending_approvals: tracker.pendingApprovals.map((a) => ({ tool_call_id: a.id, server: a.server, tool: a.tool, input: a.input })),
   };
+}
+
+/** Agents created before access keys existed get their vault on first use. */
+async function withVault(agent: AgentRecord): Promise<AgentRecord> {
+  if (agent.vaultId) return agent;
+  const { servers } = await loadCatalog(agent.userId);
+  const vaultId = await createAgentVault(agent.id, servers);
+  await setAgentVault(agent.id, vaultId);
+  return { ...agent, vaultId };
 }
 
 /** Loads the agent named in the URL; on dashboard routes, only if the signed-in user owns it. */

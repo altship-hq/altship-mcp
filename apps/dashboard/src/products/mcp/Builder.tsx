@@ -11,6 +11,7 @@ import {
   type ToolDefinition,
   type ValidationIssue,
 } from "./api.js";
+import { ConnectPanel } from "./Access.js";
 
 type Step = "import" | "select" | "result";
 
@@ -233,7 +234,7 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
                 <input type="radio" name="platform" checked={platform === "vercel"} onChange={() => setPlatform("vercel")} />
                 <span>
                   <strong>Managed</strong>
-                  <small>Deploy to Vercel and get a live MCP endpoint.</small>
+                  <small>Deploy to our servers and get a live MCP endpoint.</small>
                 </span>
               </label>
             </div>
@@ -266,7 +267,7 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
               <h3>
                 <label htmlFor="credential">{authRequirement?.envVar}</label>
               </h3>
-              <p className="hint">Required to deploy. Stored as an encrypted Vercel env var, never written to the generated code.</p>
+              <p className="hint">Required to deploy. Stored encrypted on our servers, never written to the generated code.</p>
               <input
                 id="credential"
                 type="password"
@@ -293,7 +294,7 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
                   ? "Deploying…"
                   : "Generating…"
                 : platform === "vercel"
-                  ? "Deploy to Vercel"
+                  ? "Deploy to altship"
                   : "Generate MCP server"}
             </button>
           </div>
@@ -303,15 +304,11 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
       {step === "result" && deployResult && (
         <section className="card">
           <h2>Deployed</h2>
-          <p>
-            <a href={deployResult.url} target="_blank" rel="noreferrer">
-              {deployResult.url}
-            </a>
-          </p>
           <p className="subtitle">
-            Project <code>{deployResult.projectName}</code> under the altship-mcp org, exposing{" "}
-            {deployResult.toolNames.length} tool(s).
+            <code>{deployResult.projectName}</code> is live, exposing {deployResult.toolNames.length} tool(s). Every request needs
+            an access key or an OAuth sign-in.
           </p>
+          <ConnectPanel deployment={deployResult} accessKey={deployResult.accessKey} />
           {deployResult.warnings.length > 0 && (
             <div className="banner warning">
               {deployResult.warnings.map((w) => (

@@ -1,9 +1,12 @@
 import { PlaygroundSession } from "@altship/playground";
 import type { CatalogServer, CatalogTool, ToolCatalog } from "@altship/agent-design";
 import { listDeployments, type DeploymentRecord } from "../store.js";
+import { internalAccessKey } from "../access-keys.js";
 
 export interface CatalogEntry extends CatalogServer {
   deploymentId: string;
+  /** Hosting project, which altship's own access key for the server is derived from. */
+  projectId: string;
 }
 
 export interface UnavailableServer {
@@ -35,6 +38,7 @@ export async function loadCatalog(userId: string): Promise<{ servers: CatalogEnt
       try {
         servers.push({
           deploymentId: d.id,
+          projectId: d.projectId,
           name: d.projectName,
           title: d.apiTitle,
           url: mcpEndpoint(d),
@@ -68,7 +72,10 @@ function toCatalogTool(t: NonNullable<DeploymentRecord["tools"]>[number]): Catal
 }
 
 async function listLiveTools(d: DeploymentRecord): Promise<CatalogTool[]> {
-  const session = await withTimeout(PlaygroundSession.connect({ url: mcpEndpoint(d) }), 10_000);
+  const session = await withTimeout(
+    PlaygroundSession.connect({ url: mcpEndpoint(d), headers: { authorization: `Bearer ${internalAccessKey(d.projectId)}` } }),
+    10_000,
+  );
   try {
     const tools = await withTimeout(session.listTools(), 10_000);
     return tools.map((t) => ({

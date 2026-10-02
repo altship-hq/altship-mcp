@@ -5,6 +5,7 @@ import type { ToolDefinition } from "@altship/tool-design";
 import { deriveAuthBinding, type AuthBinding } from "./auth.js";
 import { envSlug, slugify } from "./slug.js";
 import {
+  accessTemplate,
   authTemplate,
   clientTemplate,
   configTemplate,
@@ -21,7 +22,9 @@ import {
   typesTemplate,
   vercelGitignoreTemplate,
   vercelHealthHandlerTemplate,
+  vercelConfigTemplate,
   vercelMcpHandlerTemplate,
+  vercelOAuthMetadataHandlerTemplate,
   vercelPackageJsonTemplate,
   vercelReadmeTemplate,
   vercelTsconfigTemplate,
@@ -87,6 +90,7 @@ export async function generateServer(options: GenerateOptions): Promise<Generate
     "src/types.ts": typesTemplate(),
     "src/config.ts": configTemplate(baseUrlEnvVar, defaultBaseUrl),
     "src/auth.ts": authTemplate(binding),
+    "src/access.ts": accessTemplate(binding),
     "src/client.ts": clientTemplate(),
     "src/tools.ts": toolsDataTemplate(tools),
     "src/mcp-factory.ts": mcpFactoryTemplate(`${pkgSlug}-mcp`),
@@ -112,11 +116,14 @@ export async function generateVercelServer(options: GenerateOptions): Promise<Ge
     "lib/types.ts": typesTemplate(),
     "lib/config.ts": configTemplate(baseUrlEnvVar, defaultBaseUrl),
     "lib/auth.ts": authTemplate(binding),
+    "lib/access.ts": accessTemplate(binding),
     "lib/client.ts": clientTemplate(),
     "lib/tools.ts": toolsDataTemplate(tools),
     "lib/mcp-factory.ts": mcpFactoryTemplate(`${pkgSlug}-mcp`),
     "api/mcp.ts": vercelMcpHandlerTemplate(),
     "api/health.ts": vercelHealthHandlerTemplate(),
+    "api/oauth-protected-resource.ts": vercelOAuthMetadataHandlerTemplate(),
+    "vercel.json": vercelConfigTemplate(),
     "public/index.html": docsPageTemplate(apiTitle, tools, "/api/mcp"),
   };
 

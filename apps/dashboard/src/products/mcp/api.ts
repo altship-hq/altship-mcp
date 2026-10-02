@@ -1,4 +1,4 @@
-import { getJson, postJson } from "../../http.js";
+import { deleteJson, getJson, postJson } from "../../http.js";
 
 export interface ValidationIssue {
   severity: "error" | "warning";
@@ -50,10 +50,25 @@ export interface DeploymentRecord {
   projectName: string;
   projectId: string;
   url: string;
+  authMode: AuthMode | null;
 }
 
 export interface DeployResponse extends DeploymentRecord {
   warnings: string[];
+  /** The MCP endpoint clients connect to. */
+  mcpUrl: string;
+  /** The server's first access key, in full. Only ever returned here. */
+  accessKey: string;
+}
+
+/** An access key as listed in the dashboard; the key itself is only shown when created. */
+export interface AccessKey {
+  id: string;
+  deploymentId: string;
+  createdAt: string;
+  name: string;
+  prefix: string;
+  revokedAt: string | null;
 }
 
 export function importSpec(spec: string): Promise<ToolsResponse> {
@@ -83,4 +98,21 @@ export function deployToVercel(
 
 export function listDeployments(): Promise<DeploymentRecord[]> {
   return getJson<DeploymentRecord[]>("/api/deployments");
+}
+
+/** Generated managed servers serve MCP at /api/mcp. */
+export function mcpUrl(deployment: Pick<DeploymentRecord, "url">): string {
+  return `${deployment.url.replace(/\/$/, "")}/api/mcp`;
+}
+
+export function listAccessKeys(deploymentId: string): Promise<AccessKey[]> {
+  return getJson<AccessKey[]>(`/api/deployments/${deploymentId}/keys`);
+}
+
+export function createAccessKey(deploymentId: string, name: string): Promise<AccessKey & { key: string }> {
+  return postJson(`/api/deployments/${deploymentId}/keys`, { name });
+}
+
+export function revokeAccessKey(deploymentId: string, keyId: string): Promise<{ ok: true }> {
+  return deleteJson(`/api/deployments/${deploymentId}/keys/${keyId}`);
 }

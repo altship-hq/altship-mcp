@@ -11,6 +11,8 @@ export interface AgentRecord {
   coordinatorAgentId: string;
   coordinatorVersion: number;
   specialistAgentIds: { key: string; id: string; version: number }[];
+  /** Anthropic vault with altship's access keys for the agent's MCP servers. */
+  vaultId: string | null;
 }
 
 interface AgentRow {
@@ -23,6 +25,7 @@ interface AgentRow {
   coordinator_agent_id: string;
   coordinator_version: number;
   specialist_agent_ids: { key: string; id: string; version: number }[];
+  vault_id: string | null;
 }
 
 export type RunSource = "playground" | "endpoint";
@@ -61,6 +64,7 @@ function fromAgentRow(row: AgentRow): AgentRecord {
     coordinatorAgentId: row.coordinator_agent_id,
     coordinatorVersion: row.coordinator_version,
     specialistAgentIds: row.specialist_agent_ids,
+    vaultId: row.vault_id ?? null,
   };
 }
 
@@ -93,6 +97,7 @@ export async function insertAgent(record: Omit<AgentRecord, "createdAt">): Promi
       coordinator_agent_id: record.coordinatorAgentId,
       coordinator_version: record.coordinatorVersion,
       specialist_agent_ids: record.specialistAgentIds,
+      vault_id: record.vaultId,
     })
     .select("*")
     .single();
@@ -117,6 +122,11 @@ export async function getAgent(id: string, userId?: string): Promise<AgentRecord
   const { data, error } = await query.maybeSingle();
   if (error) throw new Error(`Failed to load agent: ${error.message}`);
   return data ? fromAgentRow(data as AgentRow) : null;
+}
+
+export async function setAgentVault(agentId: string, vaultId: string) {
+  const { error } = await getSupabase().from("agents").update({ vault_id: vaultId }).eq("id", agentId);
+  if (error) throw new Error(`Failed to save agent vault: ${error.message}`);
 }
 
 export async function insertRun(run: { sessionId: string; agentId: string; source: RunSource; input: string }) {

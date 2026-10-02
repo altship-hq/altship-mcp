@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import Builder from "./Builder.js";
+import { ServerPage } from "./Access.js";
 import { listDeployments, type DeploymentRecord } from "./api.js";
 import { Link } from "../../router.js";
 import { PageHead, Stat } from "../../ui.js";
 
-// MCP Creator's pages inside the dashboard: /mcp, /mcp/servers, /mcp/new.
+// MCP Creator's pages inside the dashboard: /mcp, /mcp/servers,
+// /mcp/servers/<id> (endpoint and access keys), /mcp/new.
 
 const NEW_SERVER = "mcp/new";
 
@@ -48,10 +50,14 @@ export default function McpProduct({ subpath }: { subpath: string }) {
     );
   }
 
+  const serverId = subpath.match(/^servers\/([^/]+)$/)?.[1];
+
   return (
     <>
       {loadError && <div className="notice">Couldn't load your MCP servers: {loadError}</div>}
-      {subpath === "servers" ? (
+      {serverId ? (
+        <ServerPage deploymentId={serverId} deployments={deployments} loading={loading} />
+      ) : subpath === "servers" ? (
         <>
           <PageHead title="MCP servers" description="Servers you've deployed to a managed endpoint." action={newServerButton} />
           <ServerTable deployments={deployments} loading={loading} />
@@ -138,7 +144,9 @@ function ServerTable({ deployments, loading }: { deployments: DeploymentRecord[]
           {deployments.map((d) => (
             <tr key={d.id}>
               <td className="server-name">
-                <strong>{d.apiTitle}</strong>
+                <Link to={`mcp/servers/${d.id}`}>
+                  <strong>{d.apiTitle}</strong>
+                </Link>
                 <small>{d.projectName}</small>
               </td>
               <td title={d.toolNames.join(", ")}>{d.toolNames.length}</td>
@@ -149,6 +157,7 @@ function ServerTable({ deployments, loading }: { deployments: DeploymentRecord[]
               </td>
               <td className="date">{formatDate(d.createdAt)}</td>
               <td className="row-action">
+                <Link to={`mcp/servers/${d.id}`}>Keys &amp; connect</Link>
                 <Link to={`agents/new?server=${d.id}`}>Create agent →</Link>
               </td>
             </tr>

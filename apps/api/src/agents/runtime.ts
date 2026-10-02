@@ -3,6 +3,7 @@ import { coordinatorRoster, toManagedAgentParams, type AgentPlan, type ToolCatal
 import { environmentId, getAnthropic } from "./anthropic.js";
 import { TurnTracker, toUiEvent, type AgentUiEvent } from "./events.js";
 import type { AgentRecord } from "./store.js";
+import { internalAccessKey } from "../access-keys.js";
 
 type AgentCreateParams = Parameters<Anthropic["beta"]["agents"]["create"]>[0];
 
@@ -34,11 +35,32 @@ export async function createManagedAgents(plan: AgentPlan, catalog: ToolCatalog)
   }
 }
 
+/** Anthropic vaults hold at most this many credentials. */
+const MAX_VAULT_CREDENTIALS = 20;
+
+/**
+ * Creates a vault holding altship's access key for each MCP server, so the
+ * agent's calls to those (access-controlled) servers are authorized. The keys
+ * are injected by Anthropic at egress and never enter the agent's sandbox.
+ */
+export async function createAgentVault(agentId: string, servers: { url: string; projectId: string }[]): Promise<string> {
+  const client = getAnthropic();
+  const vault = await client.beta.vaults.create({ display_name: `altship agent ${agentId}`, metadata: { altship_agent_id: agentId } });
+  for (const server of servers.slice(0, MAX_VAULT_CREDENTIALS)) {
+    await client.beta.vaults.credentials.create(vault.id, {
+      display_name: server.url,
+      auth: { type: "static_bearer", mcp_server_url: server.url, token: internalAccessKey(server.projectId) },
+    });
+  }
+  return vault.id;
+}
+
 export async function startSession(agent: AgentRecord, title: string): Promise<string> {
   const session = await getAnthropic().beta.sessions.create({
     agent: { type: "agent", id: agent.coordinatorAgentId, version: agent.coordinatorVersion },
     environment_id: environmentId(),
     title,
+    ...(agent.vaultId ? { vault_ids: [agent.vaultId] } : {}),
   });
   return session.id;
 }

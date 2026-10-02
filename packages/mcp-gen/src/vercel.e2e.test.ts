@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -13,6 +14,10 @@ import { designTools } from "@altship/tool-design";
 import { generateVercelServer } from "./generate.js";
 
 const execFileAsync = promisify(execFile);
+// Generated servers only answer callers with an access key (see access.ts).
+const ACCESS_KEY = "test-access-key-123";
+const ACCESS_KEY_SHA256 = createHash("sha256").update(ACCESS_KEY).digest("hex");
+
 const fixture = (name: string) => path.resolve(import.meta.dirname, "../../../fixtures", name);
 const harnessScript = path.resolve(import.meta.dirname, "../fixtures/vercel-local-harness.mjs");
 
@@ -68,6 +73,7 @@ describe("generated Vercel project (serverless handlers)", () => {
         MCP_PROJECT_DIR: projectDir,
         PORT: String(port),
         SWAGGER_PETSTORE_BASE_URL: mockBaseUrl,
+        MCP_ACCESS_KEY_SHA256: ACCESS_KEY_SHA256,
       },
       stdio: "ignore",
     });
@@ -92,9 +98,20 @@ describe("generated Vercel project (serverless handlers)", () => {
     expect(res.status).toBe(405);
   });
 
+  it("rejects MCP requests without a valid access key", async () => {
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+    const headers = { "content-type": "application/json", accept: "application/json, text/event-stream" };
+    const missing = await fetch(`http://localhost:${port}/api/mcp`, { method: "POST", headers, body });
+    expect(missing.status).toBe(401);
+    const wrong = await fetch(`http://localhost:${port}/api/mcp`, { method: "POST", headers: { ...headers, authorization: "Bearer nope" }, body });
+    expect(wrong.status).toBe(401);
+  });
+
   it("serves MCP tools/list and tools/call through the serverless handler", async () => {
     const client = new Client({ name: "vercel-e2e-test", version: "0.0.1" });
-    const transport = new StreamableHTTPClientTransport(new URL(`http://localhost:${port}/api/mcp`));
+    const transport = new StreamableHTTPClientTransport(new URL(`http://localhost:${port}/api/mcp`), {
+      requestInit: { headers: { authorization: `Bearer ${ACCESS_KEY}` } },
+    });
     await client.connect(transport);
 
     const { tools } = await client.listTools();

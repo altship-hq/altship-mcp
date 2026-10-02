@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -13,6 +14,10 @@ import { designTools } from "@altship/tool-design";
 import { generateServer } from "./generate.js";
 
 const execFileAsync = promisify(execFile);
+// Generated servers only answer callers with an access key (see access.ts).
+const ACCESS_KEY = "test-access-key-123";
+const ACCESS_KEY_SHA256 = createHash("sha256").update(ACCESS_KEY).digest("hex");
+
 const fixture = (name: string) => path.resolve(import.meta.dirname, "../../../fixtures", name);
 
 async function getFreePort(): Promise<number> {
@@ -77,6 +82,7 @@ describe("passthrough auth (caller's own bearer token relayed upstream)", () => 
         MCP_TRANSPORT: "http",
         PORT: String(port),
         PAYMENTS_API_BASE_URL: mockBaseUrl,
+        MCP_ACCESS_KEY_SHA256: ACCESS_KEY_SHA256,
       },
       stdio: "ignore",
     });
@@ -93,7 +99,9 @@ describe("passthrough auth (caller's own bearer token relayed upstream)", () => 
   it("relays the calling client's own bearer token to the upstream API", async () => {
     const client = new Client({ name: "passthrough-e2e-test", version: "0.0.1" });
     const transport = new StreamableHTTPClientTransport(new URL(`http://localhost:${port}/mcp`), {
-      requestInit: { headers: { authorization: "Bearer end-user-token-abc123" } },
+      // Authorization is the end user's own token for the upstream API, so the
+      // access key goes in its own header in passthrough mode.
+      requestInit: { headers: { authorization: "Bearer end-user-token-abc123", "x-mcp-access-key": ACCESS_KEY } },
     });
     await client.connect(transport);
 
@@ -106,7 +114,9 @@ describe("passthrough auth (caller's own bearer token relayed upstream)", () => 
 
   it("fails cleanly (not a crash) when the caller sends no token", async () => {
     const client = new Client({ name: "passthrough-e2e-test-notoken", version: "0.0.1" });
-    const transport = new StreamableHTTPClientTransport(new URL(`http://localhost:${port}/mcp`));
+    const transport = new StreamableHTTPClientTransport(new URL(`http://localhost:${port}/mcp`), {
+      requestInit: { headers: { "x-mcp-access-key": ACCESS_KEY } },
+    });
     await client.connect(transport);
 
     const result = await client.callTool({ name: "payments.get", arguments: { payment_id: "pay_1" } });
@@ -114,5 +124,14 @@ describe("passthrough auth (caller's own bearer token relayed upstream)", () => 
     expect((result.content as Array<{ text?: string }>)[0].text).toContain("caller's own bearer token");
 
     await client.close();
+  });
+
+  it("doesn't accept the access key as the Authorization bearer in passthrough mode", async () => {
+    const res = await fetch(`http://localhost:${port}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${ACCESS_KEY}` },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+    });
+    expect(res.status).toBe(401);
   });
 });

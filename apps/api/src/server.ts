@@ -8,8 +8,25 @@ import { readFile, rm } from "node:fs/promises";
 import { validateSpec } from "@altship/openapi";
 import { designTools } from "@altship/tool-design";
 import { generateServer, generateVercelServer, deriveAuthBinding, envSlug } from "@altship/mcp-gen";
-import { ensureProject, setProjectEnvVar, assignMcpSubdomain, deployFiles, VercelConfigError } from "./vercel-client.js";
-import { recordDeployment, listDeployments } from "./store.js";
+import { ensureProject, setProjectEnvVar, assignMcpSubdomain, deployFiles, redeploy, VercelConfigError } from "./vercel-client.js";
+import {
+  recordDeployment,
+  listDeployments,
+  getDeployment,
+  insertServerKey,
+  listServerKeys,
+  activeKeyHashes,
+  revokeServerKey,
+  type DeploymentRecord,
+} from "./store.js";
+import {
+  AccessKeyConfigError,
+  displayPrefix,
+  generateAccessKey,
+  hashAccessKey,
+  internalAccessKey,
+  oauthIssuer,
+} from "./access-keys.js";
 import { requireAuth, userIdOf } from "./auth.js";
 import { agentsRouter, agentsErrorHandler } from "./agents/router.js";
 
@@ -142,6 +159,17 @@ app.post("/api/deploy", async (req, res) => {
       await setProjectEnvVar(project.id, binding.envVar, credentialValue);
     }
 
+    // Who may call the server: the owner's first access key, altship's own
+    // (Agent Creator) key, and the owner signed in through OAuth.
+    const accessKey = generateAccessKey();
+    await setProjectEnvVar(
+      project.id,
+      "MCP_ACCESS_KEY_SHA256",
+      [hashAccessKey(accessKey), hashAccessKey(internalAccessKey(project.id))].join(","),
+    );
+    await setProjectEnvVar(project.id, "MCP_OAUTH_ISSUER", oauthIssuer());
+    await setProjectEnvVar(project.id, "MCP_OAUTH_ALLOWED_SUBJECTS", userIdOf(req));
+
     // Best-effort: gives the deployment a "<slug>.mcp.altship.io" URL
     // instead of a random *.vercel.app one. deployFiles() falls back
     // gracefully if this doesn't succeed (e.g. DNS not propagated yet).
@@ -167,10 +195,24 @@ app.post("/api/deploy", async (req, res) => {
       authMode,
     };
     await recordDeployment(record);
+    await insertServerKey({
+      id: newKeyId(),
+      deploymentId: record.id,
+      userId: record.userId,
+      name: "Default",
+      prefix: displayPrefix(accessKey),
+      keyHash: hashAccessKey(accessKey),
+    });
 
-    res.json({ ...record, createdAt: new Date().toISOString(), warnings: generated.warnings });
+    res.json({
+      ...record,
+      createdAt: new Date().toISOString(),
+      mcpUrl: mcpEndpoint(record.url),
+      accessKey,
+      warnings: generated.warnings,
+    });
   } catch (err) {
-    if (err instanceof VercelConfigError) {
+    if (err instanceof VercelConfigError || err instanceof AccessKeyConfigError) {
       return res.status(500).json({ error: err.message });
     }
     console.error("Deploy failed:", err);
@@ -179,6 +221,59 @@ app.post("/api/deploy", async (req, res) => {
     await rm(outDir, { recursive: true, force: true });
   }
 });
+
+// ---- Access keys ----------------------------------------------------------
+
+app.get("/api/deployments/:id/keys", async (req, res) => {
+  const deployment = await getDeployment(String(req.params.id), userIdOf(req));
+  if (!deployment) return res.status(404).json({ error: "MCP server not found." });
+  res.json(await listServerKeys(deployment.id, deployment.userId));
+});
+
+// Creates a key and returns it in full -- the only time it's ever shown.
+app.post("/api/deployments/:id/keys", async (req, res) => {
+  const deployment = await getDeployment(String(req.params.id), userIdOf(req));
+  if (!deployment) return res.status(404).json({ error: "MCP server not found." });
+  const name = typeof req.body?.name === "string" && req.body.name.trim() ? req.body.name.trim().slice(0, 80) : "Untitled key";
+
+  const key = generateAccessKey();
+  const record = await insertServerKey({
+    id: newKeyId(),
+    deploymentId: deployment.id,
+    userId: deployment.userId,
+    name,
+    prefix: displayPrefix(key),
+    keyHash: hashAccessKey(key),
+  });
+  await syncAccessKeys(deployment);
+  res.status(201).json({ ...record, key });
+});
+
+app.delete("/api/deployments/:id/keys/:keyId", async (req, res) => {
+  const deployment = await getDeployment(String(req.params.id), userIdOf(req));
+  if (!deployment) return res.status(404).json({ error: "MCP server not found." });
+  if (!(await revokeServerKey(String(req.params.keyId), deployment.id, deployment.userId))) {
+    return res.status(404).json({ error: "Access key not found." });
+  }
+  await syncAccessKeys(deployment);
+  res.json({ ok: true });
+});
+
+/** Pushes the deployment's current key hashes to its env and redeploys so they take effect. */
+async function syncAccessKeys(deployment: DeploymentRecord) {
+  const hashes = [...(await activeKeyHashes(deployment.id)), hashAccessKey(internalAccessKey(deployment.projectId))];
+  await setProjectEnvVar(deployment.projectId, "MCP_ACCESS_KEY_SHA256", hashes.join(","));
+  await redeploy({ id: deployment.projectId, name: deployment.projectName }, deployment.id);
+}
+
+function newKeyId(): string {
+  return `key_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+}
+
+/** Generated Vercel servers serve MCP at /api/mcp. */
+function mcpEndpoint(url: string): string {
+  return `${url.replace(/\/$/, "")}/api/mcp`;
+}
 
 // Unhandled errors come back as JSON (Express's default is an HTML page,
 // which the dashboard can't show).

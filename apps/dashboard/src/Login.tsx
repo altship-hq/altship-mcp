@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { sendPasswordReset, signIn, signInWithPassword, signUp, updatePassword, type Provider } from "./auth.js";
+import { sendPasswordReset, signIn, signInWithPassword, signUp, supabase, updatePassword, type Provider } from "./auth.js";
 import { navigate } from "./router.js";
 import logoMark from "./assets/logo-mark.png";
 
@@ -262,6 +262,101 @@ export function ResetPassword() {
           {pending ? "Saving…" : "Save password"}
         </button>
       </form>
+    </LoginCard>
+  );
+}
+
+type ConsentState =
+  | { status: "loading" }
+  | { status: "ready"; clientName: string; clientUri: string; redirectUri: string; scopes: string[]; email: string }
+  | { status: "redirecting" }
+  | { status: "error"; message: string };
+
+/**
+ * /oauth/consent: Supabase's OAuth 2.1 server sends users here (with
+ * ?authorization_id=) when an MCP client such as claude.ai or ChatGPT asks to
+ * connect to one of their altship MCP servers.
+ */
+export function OAuthConsent() {
+  const authorizationId = new URLSearchParams(window.location.search).get("authorization_id");
+  const [state, setState] = useState<ConsentState>({ status: "loading" });
+
+  useEffect(() => {
+    if (!authorizationId) {
+      setState({ status: "error", message: "This sign-in link is missing its authorization request. Start again from the app." });
+      return;
+    }
+    supabase.auth.oauth.getAuthorizationDetails(authorizationId).then(({ data, error }) => {
+      if (error || !data) {
+        setState({ status: "error", message: error?.message ?? "Couldn't load this authorization request." });
+      } else if ("authorization_id" in data) {
+        setState({
+          status: "ready",
+          clientName: data.client.name || "An app",
+          clientUri: data.client.uri,
+          redirectUri: data.redirect_uri,
+          scopes: data.scope.split(" ").filter(Boolean),
+          email: data.user.email,
+        });
+      } else {
+        // Already approved before: straight back to the app.
+        setState({ status: "redirecting" });
+        window.location.href = data.redirect_url;
+      }
+    });
+  }, [authorizationId]);
+
+  async function decide(approve: boolean) {
+    if (!authorizationId) return;
+    setState({ status: "redirecting" });
+    const { error } = approve
+      ? await supabase.auth.oauth.approveAuthorization(authorizationId)
+      : await supabase.auth.oauth.denyAuthorization(authorizationId);
+    if (error) setState({ status: "error", message: error.message });
+  }
+
+  if (state.status === "loading" || state.status === "redirecting") {
+    return (
+      <LoginCard title="Connecting…" copy={state.status === "loading" ? "Checking the request." : "Taking you back to the app."}>
+        {null}
+      </LoginCard>
+    );
+  }
+
+  if (state.status === "error") {
+    return (
+      <LoginCard title="Couldn't connect" copy="Something went wrong with this authorization request.">
+        <p className="login-error" role="alert">
+          {state.message}
+        </p>
+      </LoginCard>
+    );
+  }
+
+  let host = state.redirectUri;
+  try {
+    host = new URL(state.redirectUri).host;
+  } catch {
+    // keep the raw value
+  }
+
+  return (
+    <LoginCard title={`Allow ${state.clientName}?`} copy={`${state.clientName} wants to connect to your altship MCP servers as ${state.email}.`}>
+      <ul className="consent-list">
+        <li>Use the tools on MCP servers you own, as you</li>
+        <li>See your name and email address</li>
+      </ul>
+      <p className="login-hint">
+        You'll be sent back to <strong>{host}</strong>. Only allow apps you trust; you can revoke access at any time.
+      </p>
+      <div className="consent-actions">
+        <button type="button" className="login-provider" onClick={() => decide(false)}>
+          Deny
+        </button>
+        <button type="button" className="login-submit" onClick={() => decide(true)}>
+          Allow
+        </button>
+      </div>
     </LoginCard>
   );
 }

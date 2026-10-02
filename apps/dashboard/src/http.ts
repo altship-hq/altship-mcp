@@ -43,3 +43,7 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
 export async function getJson<T>(path: string): Promise<T> {
   return readJson<T>(path, await apiFetch(path));
 }
+
+export async function deleteJson<T>(path: string): Promise<T> {
+  return readJson<T>(path, await apiFetch(path, { method: "DELETE" }));
+}

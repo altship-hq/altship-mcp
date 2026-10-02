@@ -85,3 +85,96 @@ export async function getDeployment(id: string, userId: string): Promise<Deploym
   if (error) throw new Error(`Failed to load deployment: ${error.message}`);
   return data ? fromRow(data as DeploymentRow) : null;
 }
+
+/** An access key for a deployment, as shown in the dashboard (never the key itself). */
+export interface ServerKeyRecord {
+  id: string;
+  deploymentId: string;
+  createdAt: string;
+  name: string;
+  prefix: string;
+  revokedAt: string | null;
+}
+
+interface ServerKeyRow {
+  id: string;
+  deployment_id: string;
+  user_id: string;
+  created_at: string;
+  name: string;
+  prefix: string;
+  key_hash: string;
+  revoked_at: string | null;
+}
+
+function fromKeyRow(row: ServerKeyRow): ServerKeyRecord {
+  return {
+    id: row.id,
+    deploymentId: row.deployment_id,
+    createdAt: row.created_at,
+    name: row.name,
+    prefix: row.prefix,
+    revokedAt: row.revoked_at,
+  };
+}
+
+export async function insertServerKey(key: {
+  id: string;
+  deploymentId: string;
+  userId: string;
+  name: string;
+  prefix: string;
+  keyHash: string;
+}): Promise<ServerKeyRecord> {
+  const { data, error } = await getSupabase()
+    .from("server_keys")
+    .insert({
+      id: key.id,
+      deployment_id: key.deploymentId,
+      user_id: key.userId,
+      name: key.name,
+      prefix: key.prefix,
+      key_hash: key.keyHash,
+    })
+    .select("*")
+    .single();
+  if (error) throw new Error(`Failed to save access key: ${error.message}`);
+  return fromKeyRow(data as ServerKeyRow);
+}
+
+export async function listServerKeys(deploymentId: string, userId: string): Promise<ServerKeyRecord[]> {
+  const { data, error } = await getSupabase()
+    .from("server_keys")
+    .select("*")
+    .eq("deployment_id", deploymentId)
+    .eq("user_id", userId)
+    .is("revoked_at", null)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`Failed to list access keys: ${error.message}`);
+  return (data as ServerKeyRow[]).map(fromKeyRow);
+}
+
+/** Hashes of a deployment's active keys -- what its MCP_ACCESS_KEY_SHA256 should hold. */
+export async function activeKeyHashes(deploymentId: string): Promise<string[]> {
+  const { data, error } = await getSupabase()
+    .from("server_keys")
+    .select("key_hash")
+    .eq("deployment_id", deploymentId)
+    .is("revoked_at", null);
+  if (error) throw new Error(`Failed to load access keys: ${error.message}`);
+  return (data as { key_hash: string }[]).map((r) => r.key_hash);
+}
+
+/** Returns false if no active key with that id belongs to the user's deployment. */
+export async function revokeServerKey(keyId: string, deploymentId: string, userId: string): Promise<boolean> {
+  const { data, error } = await getSupabase()
+    .from("server_keys")
+    .update({ revoked_at: new Date().toISOString() })
+    .eq("id", keyId)
+    .eq("deployment_id", deploymentId)
+    .eq("user_id", userId)
+    .is("revoked_at", null)
+    .select("id");
+  if (error) throw new Error(`Failed to revoke access key: ${error.message}`);
+  return (data ?? []).length > 0;
+}
