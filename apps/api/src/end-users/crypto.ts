@@ -53,7 +53,9 @@ let signingKey: { key: CryptoKey | Uint8Array; kid: string; publicJwk: JWK } | u
 
 async function getSigningKey() {
   if (!signingKey) {
-    const jwk = JSON.parse(requireEnv("END_USER_OAUTH_PRIVATE_JWK")) as JWK;
+    // Tolerate the value being pasted with the quotes it has in a .env file.
+    const raw = requireEnv("END_USER_OAUTH_PRIVATE_JWK").trim().replace(/^'(.*)'$/s, "$1");
+    const jwk = JSON.parse(raw) as JWK;
     const { d: _private, ...publicJwk } = jwk;
     signingKey = { key: await importJWK(jwk, "ES256"), kid: jwk.kid ?? "end-user", publicJwk: { ...publicJwk, alg: "ES256", use: "sig" } };
   }
