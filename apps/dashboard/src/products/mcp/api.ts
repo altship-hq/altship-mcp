@@ -1,4 +1,4 @@
-import { supabase } from "./supabase.js";
+import { getJson, postJson } from "../../http.js";
 
 export interface ValidationIssue {
   severity: "error" | "warning";
@@ -54,41 +54,6 @@ export interface DeploymentRecord {
 
 export interface DeployResponse extends DeploymentRecord {
   warnings: string[];
-}
-
-// Empty by default so local dev keeps using Vite's proxy (relative "/api/..."
-// paths); production sets this since apps/web and apps/api are deployed as
-// separate Vercel projects on different subdomains.
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
-
-async function authHeader(): Promise<Record<string, string>> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  return token ? { authorization: `Bearer ${token}` } : {};
-}
-
-async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const url = `${API_BASE}${path}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...(await authHeader()) },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error ?? `Request to ${url} failed with ${res.status}`);
-  }
-  return data as T;
-}
-
-async function getJson<T>(path: string): Promise<T> {
-  const url = `${API_BASE}${path}`;
-  const res = await fetch(url, { headers: await authHeader() });
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error ?? `Request to ${url} failed with ${res.status}`);
-  }
-  return data as T;
 }
 
 export function importSpec(spec: string): Promise<ToolsResponse> {

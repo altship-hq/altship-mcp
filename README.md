@@ -10,11 +10,14 @@ See [CLAUDE.md](./CLAUDE.md) for the full product brief and [docs/mcp-server-pla
 altship-mcp/
 ├── apps/
 │   ├── api/          → import, validation, tool-design, generation orchestration
-│   ├── web/           → tool selection UI + playground
+│   ├── dashboard/     → pilot.altship.io: one dashboard for every altship product
+│   │                     (products/mcp = MCP Creator, products/agents = Agent Creator)
+│   ├── site/          → altship.io/mcp landing page ("Start building" → pilot.altship.io/mcp)
 │   └── worker/         → spec parsing, MCP server generation, deploy jobs
 ├── packages/
 │   ├── openapi/        → OpenAPI parsing + structural/quality validation
 │   ├── tool-design/     → endpoint → MCP tool mapping heuristics
+│   ├── agent-design/    → Agent Creator plans: schema, validation, Managed Agents translation
 │   ├── mcp-gen/         → MCP server code generation (templates)
 │   └── shared/          → shared types
 ├── docs/

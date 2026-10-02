@@ -83,7 +83,7 @@ export async function generateServer(options: GenerateOptions): Promise<Generate
     "tsconfig.json": tsconfigTemplate(),
     "Dockerfile": dockerfileTemplate(),
     ".env.example": envExampleTemplate(binding, baseUrlEnvVar),
-    "README.md": readmeTemplate(apiTitle, binding, tools.length),
+    "README.md": readmeTemplate(apiTitle, binding, tools.length, `${pkgSlug}-mcp`),
     "src/types.ts": typesTemplate(),
     "src/config.ts": configTemplate(baseUrlEnvVar, defaultBaseUrl),
     "src/auth.ts": authTemplate(binding),

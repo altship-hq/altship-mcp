@@ -1,0 +1,548 @@
+/* pilot.altship.io — the dashboard shell (in the style of the LangSmith
+   console) and components shared by product pages, using the altship
+   landing page's type and palette. Everything is scoped under .dash. */
+
+.dash {
+  --line: #e8e8e8;
+  --muted: #595959;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: light;
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  min-height: 100vh;
+  background: #fff;
+  color: #111;
+  font-family: Arial, sans-serif;
+}
+
+.dash *,
+.dash *::before,
+.dash *::after {
+  box-sizing: border-box;
+}
+
+.dash a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Sidebar */
+
+.dash .sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 12px;
+  background: #fafafa;
+  border-right: 1px solid var(--line);
+}
+
+.dash .side-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px 22px;
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: -0.6px;
+}
+
+.dash .side-brand img {
+  height: 24px;
+  width: auto;
+}
+
+.dash .side-brand-product {
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--muted);
+  padding-left: 10px;
+  border-left: 1px solid #ddd;
+  line-height: 18px;
+}
+
+.dash .side-label {
+  padding: 16px 8px 6px;
+  font-size: 10px;
+  letter-spacing: 1.3px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.dash .side-label:first-child {
+  padding-top: 0;
+}
+
+.dash .side-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dash .side-nav a,
+.dash .side-soon {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  font-size: 13px;
+  color: #444;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+.dash .side-nav a:hover,
+.dash .side-nav a:focus-visible {
+  background: #f0f0f0;
+  color: #111;
+}
+
+.dash .side-nav a[aria-current="page"] {
+  background: #e9e9e9;
+  color: #111;
+  font-weight: 500;
+}
+
+.dash .side-nav a.in-product {
+  color: #111;
+  font-weight: 500;
+}
+
+.dash svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.dash .side-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 4px 16px;
+  padding-left: 9px;
+  border-left: 1px solid #e3e3e3;
+}
+
+.dash .side-sub a {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.dash .side-soon {
+  color: #9a9a9a;
+  cursor: default;
+}
+
+.dash .soon-tag {
+  margin-left: auto;
+  padding: 2px 6px;
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--muted);
+  border: 1px solid #ddd;
+  border-radius: 2px;
+}
+
+.dash .side-foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 8px 0;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dash .side-foot a:hover,
+.dash .side-foot a:focus-visible {
+  color: #111;
+}
+
+/* Top bar */
+
+.dash .main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dash .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  min-height: 57px;
+  padding: 12px 32px;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+}
+
+.dash .crumbs {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dash .crumbs strong {
+  color: #111;
+  font-weight: 500;
+}
+
+.dash .crumbs a:hover,
+.dash .crumbs a:focus-visible {
+  color: #111;
+}
+
+.dash .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #111;
+  color: #fff;
+  padding: 9px 14px;
+  font-size: 12px;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+/* Content */
+
+.dash .content {
+  width: 100%;
+  max-width: 1080px;
+  padding: 32px;
+}
+
+.dash .page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.dash .page-head h1 {
+  margin: 0 0 6px;
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: -0.8px;
+}
+
+.dash .page-head p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #555;
+}
+
+.dash .notice {
+  margin-bottom: 20px;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: #a3231f;
+  background: #fdecec;
+  border-left: 2px solid currentColor;
+}
+
+.dash .stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 36px;
+  border: 1px solid var(--line);
+}
+
+.dash .stat {
+  padding: 18px 20px;
+}
+
+.dash .stat + .stat {
+  border-left: 1px solid var(--line);
+}
+
+.dash .stat-label {
+  margin-bottom: 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dash .stat-value {
+  font-size: 24px;
+  letter-spacing: -0.6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dash .dash-section {
+  margin-bottom: 36px;
+}
+
+.dash .dash-section h2 {
+  margin: 0 0 14px;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.dash .section-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+}
+
+.dash .section-row a {
+  font-size: 12px;
+  border-bottom: 1px solid #aaa;
+}
+
+.dash .quickstart {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.dash .quickstart li {
+  padding: 18px;
+  border: 1px solid var(--line);
+}
+
+.dash .quickstart .num {
+  display: block;
+  margin-bottom: 16px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dash .quickstart h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.dash .quickstart p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #555;
+}
+
+/* Home: product grid */
+
+.dash .product-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.dash .product-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 20px;
+  border: 1px solid var(--line);
+}
+
+.dash .product-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.dash .product-card h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.dash .product-card p {
+  flex: 1;
+  margin: 0 0 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #555;
+}
+
+.dash .product-card.soon {
+  background: #fafafa;
+  color: #777;
+}
+
+.dash .product-card.soon h2 {
+  color: #777;
+}
+
+/* Tables */
+
+.dash .table-wrap {
+  border: 1px solid var(--line);
+  overflow-x: auto;
+}
+
+.dash table.servers {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.dash .servers th {
+  padding: 10px 14px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+  background: #fafafa;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.dash .servers td {
+  padding: 12px 14px;
+  border-bottom: 1px solid #f0f0f0;
+  vertical-align: top;
+  font-variant-numeric: tabular-nums;
+}
+
+.dash .servers tr:last-child td {
+  border-bottom: 0;
+}
+
+.dash .server-name strong {
+  display: block;
+  font-weight: 500;
+}
+
+.dash .server-name small {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dash .servers .endpoint {
+  font-family: var(--mono);
+  font-size: 12px;
+  border-bottom: 1px solid #aaa;
+  overflow-wrap: anywhere;
+}
+
+.dash .servers .row-action {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.dash .servers .row-action a {
+  font-size: 12px;
+  border-bottom: 1px solid #aaa;
+}
+
+.dash .visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.dash .servers .date {
+  white-space: nowrap;
+  color: #555;
+}
+
+.dash .empty {
+  padding: 40px 20px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  border: 1px dashed #ccc;
+}
+
+.dash .empty p {
+  margin: 0 0 16px;
+}
+
+/* Narrow screens: sidebar collapses into a top strip */
+
+@media (max-width: 800px) {
+  .dash {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dash .sidebar {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .dash .side-brand {
+    padding: 0;
+  }
+
+  .dash .side-brand span,
+  .dash .side-label,
+  .dash .side-soon,
+  .dash .side-foot {
+    display: none;
+  }
+
+  .dash .side-nav,
+  .dash .side-product,
+  .dash .side-sub {
+    flex-direction: row;
+  }
+
+  .dash .side-product {
+    display: flex;
+  }
+
+  .dash .side-sub {
+    margin: 0;
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .dash .side-sub a {
+    font-size: 13px;
+    padding: 8px;
+  }
+
+  .dash .topbar {
+    position: static;
+    padding: 12px 16px;
+  }
+
+  .dash .content {
+    padding: 24px 16px;
+  }
+
+  .dash .stats,
+  .dash .quickstart {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dash .stat + .stat {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+}

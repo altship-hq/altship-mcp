@@ -4,14 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "cd ../../packages/openapi && npm run build && cd ../tool-design && npm run build && cd ../mcp-gen && npm run build && cd ../../apps/api && tsc -p tsconfig.json",
+    "build": "cd ../../packages/openapi && npm run build && cd ../tool-design && npm run build && cd ../mcp-gen && npm run build && cd ../playground && npm run build && cd ../agent-design && npm run build && cd ../../apps/api && tsc -p tsconfig.json",
     "dev": "tsx watch src/dev-server.ts",
     "start": "node dist/dev-server.js"
   },
   "dependencies": {
+    "@altship/agent-design": "^0.0.1",
     "@altship/mcp-gen": "^0.0.1",
     "@altship/openapi": "^0.0.1",
+    "@altship/playground": "^0.0.1",
     "@altship/tool-design": "^0.0.1",
+    "@anthropic-ai/sdk": "^0.128.0",
     "@supabase/supabase-js": "^2.47.10",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",

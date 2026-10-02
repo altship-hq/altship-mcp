@@ -1,12 +1,19 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-export interface ConnectOptions {
-  command: string;
-  args: string[];
-  cwd?: string;
-  env?: Record<string, string>;
-}
+/** Spawn a local server over stdio, or connect to a deployed one over Streamable HTTP. */
+export type ConnectOptions =
+  | {
+      command: string;
+      args: string[];
+      cwd?: string;
+      env?: Record<string, string>;
+    }
+  | {
+      url: string;
+      headers?: Record<string, string>;
+    };
 
 export interface ToolCallOutcome {
   durationMs: number;
@@ -14,18 +21,21 @@ export interface ToolCallOutcome {
   text: string;
 }
 
-/** Wraps an MCP client connection to a single generated server, spawned as a child process over stdio. */
+/** Wraps an MCP client connection to a single generated server (local over stdio, or deployed over HTTP). */
 export class PlaygroundSession {
   private constructor(private readonly client: Client) {}
 
   static async connect(options: ConnectOptions): Promise<PlaygroundSession> {
     const client = new Client({ name: "altship-playground", version: "0.0.1" });
-    const transport = new StdioClientTransport({
-      command: options.command,
-      args: options.args,
-      cwd: options.cwd,
-      env: { ...(process.env as Record<string, string>), ...options.env },
-    });
+    const transport =
+      "url" in options
+        ? new StreamableHTTPClientTransport(new URL(options.url), { requestInit: { headers: options.headers } })
+        : new StdioClientTransport({
+            command: options.command,
+            args: options.args,
+            cwd: options.cwd,
+            env: { ...(process.env as Record<string, string>), ...options.env },
+          });
     await client.connect(transport);
     return new PlaygroundSession(client);
   }

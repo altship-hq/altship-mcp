@@ -1,16 +1,14 @@
 {
-  "name": "@altship/web",
+  "name": "@altship/dashboard",
   "version": "0.0.1",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "cd ../../packages/shared && npm run build && cd ../../apps/web && tsc -p tsconfig.json && vite build",
+    "build": "tsc -p tsconfig.json && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@altship/shared": "^0.0.1",
-    "@supabase/supabase-js": "^2.47.10",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

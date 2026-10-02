@@ -6,12 +6,8 @@ import { createClient } from "@supabase/supabase-js";
 let client: ReturnType<typeof createClient<any>> | undefined;
 
 /**
- * Server-side Supabase client using the service_role key: bypasses row-level
- * security, so every query we write must filter by user_id ourselves. This
- * is the shared `altship` identity project -- auth.users here is intended
- * to be common across every altship product, not just this one, so this
- * app's own tables (deployments) reference auth.users.id but otherwise stay
- * self-contained.
+ * Server-side Supabase client using the service_role key (bypasses row-level
+ * security). Used only as storage for the deployments table.
  */
 export function getSupabase() {
   if (!client) {

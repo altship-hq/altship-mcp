@@ -1,50 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
-import type { Session } from "@supabase/supabase-js";
-import { supabase } from "./supabase.js";
+import { useMemo, useState } from "react";
 import {
   deployToVercel,
   generateServer,
   importSpec,
-  listDeployments,
   type AuthMode,
   type AuthRequirement,
   type DeployResponse,
-  type DeploymentRecord,
   type GenerateResponse,
   type Platform,
   type ToolDefinition,
   type ValidationIssue,
 } from "./api.js";
 
-export default function App() {
-  const [session, setSession] = useState<Session | null>(null);
-  const [checkingSession, setCheckingSession] = useState(true);
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setCheckingSession(false);
-    });
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-    });
-    return () => subscription.subscription.unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    if (!checkingSession && !session) {
-      const redirect = encodeURIComponent(window.location.href);
-      window.location.href = `${import.meta.env.VITE_LANDING_URL}/?redirect=${redirect}`;
-    }
-  }, [checkingSession, session]);
-
-  if (checkingSession || !session) return null;
-  return <Workspace session={session} />;
-}
-
 type Step = "import" | "select" | "result";
 
-function Workspace({ session }: { session: Session }) {
+/** The spec → tools → generate/deploy flow. Rendered on MCP Creator's "New server" page. */
+export default function Builder({ onDeployed }: { onDeployed?: (deployment: DeployResponse) => void }) {
   const [step, setStep] = useState<Step>("import");
   const [specInput, setSpecInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -62,23 +33,16 @@ function Workspace({ session }: { session: Session }) {
 
   const [generateResult, setGenerateResult] = useState<GenerateResponse | null>(null);
   const [deployResult, setDeployResult] = useState<DeployResponse | null>(null);
-  const [deployments, setDeployments] = useState<DeploymentRecord[]>([]);
 
-  const groups = useMemo(() => groupByNamespace(tools), [tools]);
+  const [filter, setFilter] = useState("");
+  const visibleTools = useMemo(() => {
+    const query = filter.trim().toLowerCase();
+    if (!query) return tools;
+    return tools.filter((t) => [t.name, t.path, t.description].some((field) => field?.toLowerCase().includes(query)));
+  }, [tools, filter]);
+  const visibleGroups = useMemo(() => groupByNamespace(visibleTools), [visibleTools]);
   const selectedCount = Object.values(selected).filter(Boolean).length;
   const needsCredential = platform === "vercel" && authRequirement !== null && authMode === "static";
-
-  useEffect(() => {
-    refreshDeployments();
-  }, []);
-
-  async function refreshDeployments() {
-    try {
-      setDeployments(await listDeployments());
-    } catch {
-      // Non-fatal: the main flow doesn't depend on deployment history loading.
-    }
-  }
 
   async function handleImport() {
     setLoading(true);
@@ -115,7 +79,7 @@ function Workspace({ session }: { session: Session }) {
       if (platform === "vercel") {
         const result = await deployToVercel(specInput.trim(), toolNames, authMode, credentialValue || undefined);
         setDeployResult(result);
-        refreshDeployments();
+        onDeployed?.(result);
       } else {
         const result = await generateServer(specInput.trim(), toolNames, platform, authMode);
         setGenerateResult(result);
@@ -128,6 +92,14 @@ function Workspace({ session }: { session: Session }) {
     }
   }
 
+  function setMany(toolsToSet: ToolDefinition[], checked: boolean) {
+    setSelected((s) => {
+      const next = { ...s };
+      for (const tool of toolsToSet) next[tool.name] = checked;
+      return next;
+    });
+  }
+
   function reset() {
     setStep("import");
     setSpecInput("");
@@ -136,6 +108,7 @@ function Workspace({ session }: { session: Session }) {
     setIssues([]);
     setTools([]);
     setSelected({});
+    setFilter("");
     setAuthRequirement(null);
     setPassthroughAvailable(false);
     setAuthMode("static");
@@ -146,25 +119,6 @@ function Workspace({ session }: { session: Session }) {
 
   return (
     <div className="page">
-      <header className="app-header">
-        <div>
-          <h1>AltShip MCP</h1>
-          <p className="subtitle">Turn an OpenAPI spec into a production-ready MCP server.</p>
-        </div>
-        <div className="account">
-          <span>{session.user.email}</span>
-          <button
-            className="secondary"
-            onClick={async () => {
-              await supabase.auth.signOut();
-              window.location.href = import.meta.env.VITE_LANDING_URL;
-            }}
-          >
-            Sign out
-          </button>
-        </div>
-      </header>
-
       {errorMessage && <div className="banner error">{errorMessage}</div>}
 
       {step === "import" && (
@@ -189,92 +143,130 @@ function Workspace({ session }: { session: Session }) {
       )}
 
       {step === "select" && (
-        <section className="card">
-          <h2>{apiTitle}</h2>
-          <p className="subtitle">
-            {tools.length} operation(s) discovered. Review the proposed tool surface — destructive operations are
-            unchecked by default.
-          </p>
-          {issues.length > 0 && <IssueList issues={issues} collapsedByDefault />}
+        <section className="select-step">
+          <div className="select-head">
+            <h2>{apiTitle}</h2>
+            <p className="subtitle">
+              {tools.length} operation{tools.length === 1 ? "" : "s"} discovered. Choose which ones agents can call —
+              destructive operations start unchecked.
+            </p>
+            {issues.length > 0 && <IssueList issues={issues} collapsedByDefault />}
+          </div>
 
-          {Object.entries(groups).map(([namespace, groupTools]) => (
-            <div key={namespace} className="group">
-              <h3>{namespace}</h3>
-              {groupTools.map((tool) => (
-                <label key={tool.name} className="tool-row">
-                  <input
-                    type="checkbox"
-                    checked={selected[tool.name] ?? false}
-                    onChange={(e) => setSelected((s) => ({ ...s, [tool.name]: e.target.checked }))}
-                  />
-                  <div className="tool-body">
-                    <div className="tool-title">
-                      <code>
-                        {tool.method} {tool.path}
-                      </code>
-                      <span className="arrow">→</span>
-                      <strong>{tool.name}</strong>
-                      {tool.destructive && <span className="flag destructive">destructive</span>}
-                      {tool.sensitive && <span className="flag sensitive">sensitive</span>}
-                    </div>
-                    {tool.description && <p className="tool-desc">{tool.description}</p>}
-                  </div>
-                </label>
-              ))}
+          <div className="tool-toolbar">
+            <input
+              type="search"
+              className="tool-filter"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter by name, path or description"
+              aria-label="Filter tools"
+            />
+            <span className="tool-count">
+              {selectedCount} of {tools.length} selected
+            </span>
+            <button className="link" onClick={() => setMany(visibleTools, true)}>
+              Select all
+            </button>
+            <button className="link" onClick={() => setMany(visibleTools, false)}>
+              Clear
+            </button>
+          </div>
+
+          <div className="tool-table">
+            {Object.entries(visibleGroups).map(([namespace, groupTools]) => {
+              const checkedCount = groupTools.filter((t) => selected[t.name]).length;
+              return (
+                <div key={namespace} className="tool-group">
+                  <label className="tool-group-head">
+                    <input
+                      type="checkbox"
+                      checked={checkedCount === groupTools.length}
+                      ref={(el) => {
+                        if (el) el.indeterminate = checkedCount > 0 && checkedCount < groupTools.length;
+                      }}
+                      onChange={(e) => setMany(groupTools, e.target.checked)}
+                    />
+                    <span className="tool-group-name">{namespace}</span>
+                    <span className="tool-group-count">
+                      {checkedCount}/{groupTools.length}
+                    </span>
+                  </label>
+                  {groupTools.map((tool) => (
+                    <label key={tool.name} className={selected[tool.name] ? "tool-row is-selected" : "tool-row"}>
+                      <input
+                        type="checkbox"
+                        checked={selected[tool.name] ?? false}
+                        onChange={(e) => setSelected((s) => ({ ...s, [tool.name]: e.target.checked }))}
+                      />
+                      <div className="tool-main">
+                        <div className="tool-name">
+                          {tool.name}
+                          {tool.destructive && <span className="flag destructive">Destructive</span>}
+                          {tool.sensitive && <span className="flag sensitive">Sensitive</span>}
+                        </div>
+                        {tool.description && <p className="tool-desc">{tool.description}</p>}
+                      </div>
+                      <div className="tool-endpoint">
+                        <span className={`method method-${tool.method.toLowerCase()}`}>{tool.method}</span>
+                        <code>{tool.path}</code>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              );
+            })}
+            {visibleTools.length === 0 && <div className="tool-empty">No tools match "{filter}".</div>}
+          </div>
+
+          <div className="config-section">
+            <h3>Deploy target</h3>
+            <div className="option-grid">
+              <label className="option">
+                <input type="radio" name="platform" checked={platform === "node"} onChange={() => setPlatform("node")} />
+                <span>
+                  <strong>Self-hosted</strong>
+                  <small>Node + Docker source you run on your own infrastructure.</small>
+                </span>
+              </label>
+              <label className="option">
+                <input type="radio" name="platform" checked={platform === "vercel"} onChange={() => setPlatform("vercel")} />
+                <span>
+                  <strong>Managed</strong>
+                  <small>Deploy to Vercel and get a live MCP endpoint.</small>
+                </span>
+              </label>
             </div>
-          ))}
-
-          <div className="platform-picker">
-            <span className="platform-label">Deploy target:</span>
-            <label>
-              <input
-                type="radio"
-                name="platform"
-                checked={platform === "node"}
-                onChange={() => setPlatform("node")}
-              />
-              Node + Docker (self-hosted)
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="platform"
-                checked={platform === "vercel"}
-                onChange={() => setPlatform("vercel")}
-              />
-              Vercel (managed — deploys to a live URL)
-            </label>
           </div>
 
           {passthroughAvailable && (
-            <div className="platform-picker">
-              <span className="platform-label">Auth model:</span>
-              <label>
-                <input
-                  type="radio"
-                  name="authMode"
-                  checked={authMode === "static"}
-                  onChange={() => setAuthMode("static")}
-                />
-                Shared credential (one server-side token for every call)
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="authMode"
-                  checked={authMode === "passthrough"}
-                  onChange={() => setAuthMode("passthrough")}
-                />
-                Per-user (forward each caller's own token; no credential needed here)
-              </label>
+            <div className="config-section">
+              <h3>Auth model</h3>
+              <div className="option-grid">
+                <label className="option">
+                  <input type="radio" name="authMode" checked={authMode === "static"} onChange={() => setAuthMode("static")} />
+                  <span>
+                    <strong>Shared credential</strong>
+                    <small>One server-side token for every call.</small>
+                  </span>
+                </label>
+                <label className="option">
+                  <input type="radio" name="authMode" checked={authMode === "passthrough"} onChange={() => setAuthMode("passthrough")} />
+                  <span>
+                    <strong>Per-user</strong>
+                    <small>Forward each caller's own token; no credential needed here.</small>
+                  </span>
+                </label>
+              </div>
             </div>
           )}
 
           {needsCredential && (
-            <div className="credential-field">
-              <label htmlFor="credential">
-                {authRequirement?.envVar} <span className="hint">— required to deploy; stored as an encrypted Vercel env var, never written to the generated code</span>
-              </label>
+            <div className="config-section credential-field">
+              <h3>
+                <label htmlFor="credential">{authRequirement?.envVar}</label>
+              </h3>
+              <p className="hint">Required to deploy. Stored as an encrypted Vercel env var, never written to the generated code.</p>
               <input
                 id="credential"
                 type="password"
@@ -285,10 +277,13 @@ function Workspace({ session }: { session: Session }) {
             </div>
           )}
 
-          <div className="actions">
+          <div className="action-bar">
             <button className="secondary" onClick={reset}>
-              Back
+              ← Back
             </button>
+            <span className="tool-count">
+              {selectedCount} tool{selectedCount === 1 ? "" : "s"} selected
+            </span>
             <button
               disabled={loading || selectedCount === 0 || (needsCredential && !credentialValue.trim())}
               onClick={handleGenerate}
@@ -298,8 +293,8 @@ function Workspace({ session }: { session: Session }) {
                   ? "Deploying…"
                   : "Generating…"
                 : platform === "vercel"
-                  ? `Deploy to Vercel (${selectedCount} tool(s))`
-                  : `Generate MCP Server (${selectedCount} tool(s))`}
+                  ? "Deploy to Vercel"
+                  : "Generate MCP server"}
             </button>
           </div>
         </section>
@@ -358,24 +353,6 @@ function Workspace({ session }: { session: Session }) {
         </section>
       )}
 
-      {step === "import" && deployments.length > 0 && (
-        <section className="card">
-          <h2>Your MCPs</h2>
-          <ul className="deployment-list">
-            {deployments.map((d) => (
-              <li key={d.id}>
-                <div>
-                  <strong>{d.apiTitle}</strong> — {d.toolNames.length} tool(s)
-                </div>
-                <a href={d.url} target="_blank" rel="noreferrer">
-                  {d.url}
-                </a>
-                <span className="deployment-date">{new Date(d.createdAt).toLocaleString()}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
     </div>
   );
 }
