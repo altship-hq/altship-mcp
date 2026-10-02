@@ -12,7 +12,6 @@ altship-mcp/
 │   ├── api/          → import, validation, tool-design, generation orchestration
 │   ├── dashboard/     → pilot.altship.io: one dashboard for every altship product
 │   │                     (products/mcp = MCP Creator, products/agents = Agent Creator)
-│   ├── site/          → altship.io/mcp landing page ("Start building" → pilot.altship.io/mcp)
 │   └── worker/         → spec parsing, MCP server generation, deploy jobs
 ├── packages/
 │   ├── openapi/        → OpenAPI parsing + structural/quality validation
