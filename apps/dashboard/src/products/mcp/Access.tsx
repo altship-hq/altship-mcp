@@ -2,16 +2,21 @@ import { useEffect, useState, type FormEvent } from "react";
 import {
   createAccessKey,
   listAccessKeys,
+  listConnections,
   mcpUrl,
   revokeAccessKey,
+  revokeConnection,
   type AccessKey,
   type DeploymentRecord,
+  type EndUserConnection,
 } from "./api.js";
 import { Link } from "../../router.js";
 import { PageHead } from "../../ui.js";
 
-// How clients connect to a managed MCP server: its endpoint, access keys
-// (shown in full once, when created), and OAuth sign-in for chat apps.
+// How clients connect to a managed MCP server. Private servers: endpoint,
+// access keys (shown in full once, when created) and OAuth sign-in for chat
+// apps. Servers for customers: instructions to share with end users, and the
+// people who've connected.
 
 function CopyField({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false);
@@ -47,6 +52,7 @@ export function NewKeyNotice({ accessKey }: { accessKey: string }) {
 
 /** Endpoint plus how to authenticate, for code/SDK clients and for chat apps. */
 export function ConnectPanel({ deployment, accessKey }: { deployment: DeploymentRecord; accessKey?: string }) {
+  if (deployment.audience === "customers") return <CustomerConnectPanel deployment={deployment} />;
   const endpoint = mcpUrl(deployment);
   const perUser = deployment.authMode === "passthrough";
   const keyHeader = perUser ? `"X-MCP-Access-Key": "${accessKey ?? "<access key>"}"` : `"Authorization": "Bearer ${accessKey ?? "<access key>"}"`;
@@ -96,6 +102,112 @@ export function ConnectPanel({ deployment, accessKey }: { deployment: Deployment
   );
 }
 
+/** For servers offered to customers: what the owner shares with their users. */
+function CustomerConnectPanel({ deployment }: { deployment: DeploymentRecord }) {
+  const endpoint = mcpUrl(deployment);
+  const product = deployment.connectSettings?.displayName ?? deployment.apiTitle;
+  const credential = deployment.connectSettings?.credentialKind === "basic" ? "username and password" : "API key";
+  const docs = `## Use ${product} in Claude, ChatGPT and other AI apps
+
+1. In your AI app, add a custom connector (MCP server) with this URL:
+   ${endpoint}
+2. When asked, enter your ${product} ${credential} and click Connect.
+
+The app can then use ${product} for you, with your own account's access.`;
+
+  return (
+    <div className="connect">
+      <CopyField label="MCP endpoint" value={endpoint} />
+      <p>
+        Share this URL with your users. When they add it in Claude, ChatGPT or another MCP client, they're asked for their own{" "}
+        {product} {credential} on a {product}-branded page. They don't need an altship account, and each person only gets their
+        own account's access.
+      </p>
+      <h3>For your docs</h3>
+      <pre className="snippet">{docs}</pre>
+      <CopyField label="Copy for your docs" value={docs} />
+    </div>
+  );
+}
+
+/** For servers offered to customers: the people who've connected, with revoke. */
+function Connections({ deployment }: { deployment: DeploymentRecord }) {
+  const [connections, setConnections] = useState<EndUserConnection[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    listConnections(deployment.id)
+      .then(setConnections)
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+  }, [deployment.id]);
+
+  async function revoke(connection: EndUserConnection) {
+    if (!window.confirm("Disconnect this user? Their app loses access within the hour, and they'd need to connect again.")) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await revokeConnection(deployment.id, connection.id);
+      setConnections((current) => (current ?? []).filter((c) => c.id !== connection.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+    setBusy(false);
+  }
+
+  const date = (iso: string | null) =>
+    iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—";
+
+  return (
+    <section className="dash-section">
+      <h2>Connected users</h2>
+      {error && <div className="notice">{error}</div>}
+      {connections === null ? (
+        <div className="empty">Loading…</div>
+      ) : connections.length === 0 ? (
+        <div className="empty">
+          <p>Nobody has connected yet. Share the endpoint above with your users.</p>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table className="servers">
+            <thead>
+              <tr>
+                <th>App</th>
+                <th>Credential</th>
+                <th>Connected</th>
+                <th>Last used</th>
+                <th>
+                  <span className="visually-hidden">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {connections.map((c) => (
+                <tr key={c.id}>
+                  <td>
+                    <strong>{c.clientName ?? "Unknown app"}</strong>
+                  </td>
+                  <td>
+                    <code>{c.credentialHint}</code>
+                  </td>
+                  <td className="date">{date(c.createdAt)}</td>
+                  <td className="date">{date(c.lastUsedAt)}</td>
+                  <td className="row-action">
+                    <button type="button" className="link-danger" disabled={busy} onClick={() => revoke(c)}>
+                      Disconnect
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 /** /mcp/servers/<id>: one server's endpoint and access keys. */
 export function ServerPage({ deploymentId, deployments, loading }: { deploymentId: string; deployments: DeploymentRecord[]; loading: boolean }) {
   const deployment = deployments.find((d) => d.id === deploymentId);
@@ -122,6 +234,26 @@ export function ServerPage({ deploymentId, deployments, loading }: { deploymentI
           Back to MCP servers
         </Link>
       </div>
+    );
+  }
+
+  if (deployment.audience === "customers") {
+    return (
+      <>
+        <PageHead title={deployment.apiTitle} description={`${deployment.toolNames.length} tools · ${deployment.projectName}`} />
+        <section className="dash-section">
+          <h2>Who it's for</h2>
+          <div className="audience-row">
+            <strong>Your customers</strong>
+            <span>Anyone with a {deployment.connectSettings?.displayName ?? deployment.apiTitle} account, signing in with their own credential.</span>
+          </div>
+        </section>
+        <section className="dash-section">
+          <h2>Connect</h2>
+          <ConnectPanel deployment={deployment} />
+        </section>
+        <Connections deployment={deployment} />
+      </>
     );
   }
 
@@ -159,6 +291,14 @@ export function ServerPage({ deploymentId, deployments, loading }: { deploymentI
     <>
       <PageHead title={deployment.apiTitle} description={`${deployment.toolNames.length} tools · ${deployment.projectName}`} />
       {error && <div className="notice">{error}</div>}
+
+      <section className="dash-section">
+        <h2>Who it's for</h2>
+        <div className="audience-row">
+          <strong>Private</strong>
+          <span>You and your team, through access keys or by signing in with your altship account.</span>
+        </div>
+      </section>
 
       <section className="dash-section">
         <h2>Connect</h2>

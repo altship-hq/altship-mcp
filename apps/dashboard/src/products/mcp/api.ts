@@ -51,14 +51,27 @@ export interface DeploymentRecord {
   projectId: string;
   url: string;
   authMode: AuthMode | null;
+  audience: Audience;
+  /** For servers offered to customers: what their connect page shows. */
+  connectSettings: { displayName: string; credentialKind: string; helpText: string | null } | null;
+}
+
+/** Someone who connected to a server offered to customers. */
+export interface EndUserConnection {
+  id: string;
+  clientName: string | null;
+  createdAt: string;
+  lastUsedAt: string | null;
+  /** Never the credential itself: e.g. "…a1b2", or a username. */
+  credentialHint: string;
 }
 
 export interface DeployResponse extends DeploymentRecord {
   warnings: string[];
   /** The MCP endpoint clients connect to. */
   mcpUrl: string;
-  /** The server's first access key, in full. Only ever returned here. */
-  accessKey: string;
+  /** A private server's first access key, in full. Only ever returned here; null for servers offered to customers. */
+  accessKey: string | null;
 }
 
 /** An access key as listed in the dashboard; the key itself is only shown when created. */
@@ -77,6 +90,8 @@ export function importSpec(spec: string): Promise<ToolsResponse> {
 
 export type Platform = "node" | "vercel";
 export type AuthMode = "static" | "passthrough";
+/** Who a managed server is for: your team ("private") or your own customers (coming soon). */
+export type Audience = "private" | "customers";
 
 export function generateServer(
   spec: string,
@@ -90,10 +105,9 @@ export function generateServer(
 export function deployToVercel(
   spec: string,
   toolNames: string[],
-  authMode: AuthMode = "static",
-  credentialValue?: string,
+  options: { authMode?: AuthMode; credentialValue?: string; audience?: Audience; connectHelpText?: string } = {},
 ): Promise<DeployResponse> {
-  return postJson<DeployResponse>("/api/deploy", { spec, toolNames, authMode, credentialValue });
+  return postJson<DeployResponse>("/api/deploy", { spec, toolNames, ...options });
 }
 
 export function listDeployments(): Promise<DeploymentRecord[]> {
@@ -111,6 +125,14 @@ export function listAccessKeys(deploymentId: string): Promise<AccessKey[]> {
 
 export function createAccessKey(deploymentId: string, name: string): Promise<AccessKey & { key: string }> {
   return postJson(`/api/deployments/${deploymentId}/keys`, { name });
+}
+
+export function listConnections(deploymentId: string): Promise<EndUserConnection[]> {
+  return getJson<EndUserConnection[]>(`/api/deployments/${deploymentId}/connections`);
+}
+
+export function revokeConnection(deploymentId: string, connectionId: string): Promise<{ ok: true }> {
+  return deleteJson(`/api/deployments/${deploymentId}/connections/${connectionId}`);
 }
 
 export function revokeAccessKey(deploymentId: string, keyId: string): Promise<{ ok: true }> {

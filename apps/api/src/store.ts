@@ -1,4 +1,5 @@
 import { getSupabase } from "./supabase.js";
+import type { Audience } from "./server-access.js";
 
 /** A tool as deployed, kept so other products (Agent Creator) can see what a server offers. */
 export interface DeployedTool {
@@ -9,9 +10,21 @@ export interface DeployedTool {
   inputSchema: Record<string, unknown>;
 }
 
+/** How end users connect to a "for your customers" server (shown on its connect page). */
+export interface ConnectSettings {
+  /** Product name shown to end users, e.g. "Bukeen". */
+  displayName: string;
+  /** How their own credential is applied upstream; decides what the connect page asks for. */
+  credentialKind: "apiKey-header" | "apiKey-query" | "bearer" | "basic";
+  /** Optional: where end users find their credential, e.g. "Bukeen → Settings → API". */
+  helpText: string | null;
+}
+
 export interface DeploymentRecord {
   id: string;
   userId: string;
+  /** Who the server is for: the owner's team ("private") or the owner's own customers. */
+  audience: Audience;
   createdAt: string;
   apiTitle: string;
   toolNames: string[];
@@ -21,11 +34,14 @@ export interface DeploymentRecord {
   /** Null for deployments recorded before tools were stored. */
   tools: DeployedTool[] | null;
   authMode: "static" | "passthrough" | null;
+  /** Only for audience "customers". */
+  connectSettings: ConnectSettings | null;
 }
 
 interface DeploymentRow {
   id: string;
   user_id: string;
+  audience: Audience | null;
   created_at: string;
   api_title: string;
   tool_names: string[];
@@ -34,12 +50,14 @@ interface DeploymentRow {
   url: string;
   tools: DeployedTool[] | null;
   auth_mode: "static" | "passthrough" | null;
+  connect_settings: ConnectSettings | null;
 }
 
 function fromRow(row: DeploymentRow): DeploymentRecord {
   return {
     id: row.id,
     userId: row.user_id,
+    audience: row.audience ?? "private",
     createdAt: row.created_at,
     apiTitle: row.api_title,
     toolNames: row.tool_names,
@@ -48,6 +66,7 @@ function fromRow(row: DeploymentRow): DeploymentRecord {
     url: row.url,
     tools: row.tools ?? null,
     authMode: row.auth_mode ?? null,
+    connectSettings: row.connect_settings ?? null,
   };
 }
 
@@ -68,6 +87,7 @@ export async function recordDeployment(record: Omit<DeploymentRecord, "createdAt
     .insert({
       id: record.id,
       user_id: record.userId,
+      audience: record.audience,
       api_title: record.apiTitle,
       tool_names: record.toolNames,
       project_name: record.projectName,
@@ -75,6 +95,7 @@ export async function recordDeployment(record: Omit<DeploymentRecord, "createdAt
       url: record.url,
       tools: record.tools,
       auth_mode: record.authMode,
+      connect_settings: record.connectSettings,
     });
 
   if (error) throw new Error(`Failed to record deployment: ${error.message}`);
@@ -82,6 +103,32 @@ export async function recordDeployment(record: Omit<DeploymentRecord, "createdAt
 
 export async function getDeployment(id: string, userId: string): Promise<DeploymentRecord | null> {
   const { data, error } = await getSupabase().from("deployments").select("*").eq("id", id).eq("user_id", userId).maybeSingle();
+  if (error) throw new Error(`Failed to load deployment: ${error.message}`);
+  return data ? fromRow(data as DeploymentRow) : null;
+}
+
+/** The "for your customers" server whose MCP endpoint is `mcpUrl` (served at <deployment url>/api/mcp). */
+export async function findCustomerDeploymentByMcpUrl(mcpUrl: string): Promise<DeploymentRecord | null> {
+  let url: URL;
+  try {
+    url = new URL(mcpUrl);
+  } catch {
+    return null;
+  }
+  if (url.pathname.replace(/\/$/, "") !== "/api/mcp") return null;
+  const { data, error } = await getSupabase()
+    .from("deployments")
+    .select("*")
+    .eq("url", url.origin)
+    .eq("audience", "customers")
+    .maybeSingle();
+  if (error) throw new Error(`Failed to look up MCP server: ${error.message}`);
+  return data ? fromRow(data as DeploymentRow) : null;
+}
+
+/** Any deployment by id, regardless of owner (for the end-user sign-in server). */
+export async function getDeploymentById(id: string): Promise<DeploymentRecord | null> {
+  const { data, error } = await getSupabase().from("deployments").select("*").eq("id", id).maybeSingle();
   if (error) throw new Error(`Failed to load deployment: ${error.message}`);
   return data ? fromRow(data as DeploymentRow) : null;
 }

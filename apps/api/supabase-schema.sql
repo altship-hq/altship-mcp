@@ -5,6 +5,9 @@
 create table if not exists deployments (
   id text primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
+  -- Who the server is for: 'private' (the owner, their team and their keys)
+  -- or 'customers' (the owner's own users, signing in with the owner's login).
+  audience text not null default 'private' check (audience in ('private', 'customers')),
   created_at timestamptz not null default now(),
   api_title text not null,
   tool_names text[] not null,
@@ -18,6 +21,9 @@ create table if not exists deployments (
 );
 
 create index if not exists deployments_user_id_idx on deployments (user_id, created_at desc);
+
+alter table deployments add column if not exists audience text not null default 'private'
+  check (audience in ('private', 'customers'));
 
 alter table deployments enable row level security;
 
@@ -91,3 +97,71 @@ create table if not exists agent_runs (
 create index if not exists agent_runs_agent_id_idx on agent_runs (agent_id, created_at desc);
 
 alter table agent_runs enable row level security;
+
+-- ---- End users of "for your customers" MCP servers --------------------------
+-- People who connect to a SaaS's MCP server (from Claude, ChatGPT, ...) and
+-- sign in with their own credential for the SaaS. They are not altship
+-- users: each connection is its own lightweight identity.
+
+alter table deployments add column if not exists connect_settings jsonb;
+
+-- OAuth clients that registered themselves (dynamic client registration).
+create table if not exists oauth_clients (
+  client_id text primary key,
+  created_at timestamptz not null default now(),
+  client_name text,
+  client_uri text,
+  redirect_uris text[] not null
+);
+
+alter table oauth_clients enable row level security;
+
+-- One end user's connection to one MCP server. `credential_sealed` is their
+-- upstream credential encrypted with that server's key (never stored in plain text).
+create table if not exists end_user_connections (
+  id text primary key,
+  deployment_id text not null references deployments(id) on delete cascade,
+  client_id text not null references oauth_clients(client_id) on delete cascade,
+  created_at timestamptz not null default now(),
+  last_used_at timestamptz,
+  revoked_at timestamptz,
+  credential_hint text not null,
+  credential_sealed text not null
+);
+
+create index if not exists end_user_connections_deployment_idx on end_user_connections (deployment_id, created_at desc);
+
+alter table end_user_connections enable row level security;
+
+-- Authorization requests: created at /oauth/authorize, approved on the connect
+-- page (which sets the code), then exchanged once at /oauth/token.
+create table if not exists oauth_requests (
+  id text primary key,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  client_id text not null references oauth_clients(client_id) on delete cascade,
+  deployment_id text not null references deployments(id) on delete cascade,
+  redirect_uri text not null,
+  code_challenge text not null,
+  state text,
+  scope text,
+  code_hash text unique,
+  connection_id text references end_user_connections(id) on delete cascade,
+  used_at timestamptz
+);
+
+alter table oauth_requests enable row level security;
+
+create table if not exists oauth_refresh_tokens (
+  token_hash text primary key,
+  connection_id text not null references end_user_connections(id) on delete cascade,
+  client_id text not null references oauth_clients(client_id) on delete cascade,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  used_at timestamptz
+);
+
+create index if not exists oauth_refresh_tokens_connection_idx on oauth_refresh_tokens (connection_id);
+
+alter table oauth_refresh_tokens enable row level security;
+

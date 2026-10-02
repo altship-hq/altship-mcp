@@ -36,6 +36,12 @@ export interface GenerateOptions {
   outDir: string;
   /** Forward each caller's own bearer token to the upstream API instead of one shared credential. Only takes effect for http-bearer schemes. */
   authMode?: "static" | "passthrough";
+  /**
+   * Each person connecting signs in with their own credential for the
+   * upstream API, delivered (encrypted) inside their access token -- for
+   * servers a SaaS offers to its own customers. Replaces the shared env var.
+   */
+  perUserCredential?: boolean;
 }
 
 export interface GenerateResult {
@@ -78,18 +84,18 @@ async function writeFiles(outDir: string, files: Record<string, string>): Promis
 
 /** Generates a self-contained Node server: stdio by default, or Streamable HTTP when run with MCP_TRANSPORT=http (e.g. in a container). */
 export async function generateServer(options: GenerateOptions): Promise<GenerateResult> {
-  const { document, tools, outDir, authMode } = options;
+  const { document, tools, outDir, authMode, perUserCredential } = options;
   const { apiTitle, pkgSlug, baseUrlEnvVar, defaultBaseUrl, binding, warnings } = deriveMeta(document, authMode);
 
   const files: Record<string, string> = {
     "package.json": packageJsonTemplate(`${pkgSlug}-mcp`),
     "tsconfig.json": tsconfigTemplate(),
     "Dockerfile": dockerfileTemplate(),
-    ".env.example": envExampleTemplate(binding, baseUrlEnvVar),
-    "README.md": readmeTemplate(apiTitle, binding, tools.length, `${pkgSlug}-mcp`),
+    ".env.example": envExampleTemplate(binding, baseUrlEnvVar, perUserCredential),
+    "README.md": readmeTemplate(apiTitle, binding, tools.length, `${pkgSlug}-mcp`, perUserCredential),
     "src/types.ts": typesTemplate(),
     "src/config.ts": configTemplate(baseUrlEnvVar, defaultBaseUrl),
-    "src/auth.ts": authTemplate(binding),
+    "src/auth.ts": authTemplate(binding, perUserCredential),
     "src/access.ts": accessTemplate(binding),
     "src/client.ts": clientTemplate(),
     "src/tools.ts": toolsDataTemplate(tools),
@@ -104,18 +110,18 @@ export async function generateServer(options: GenerateOptions): Promise<Generate
 
 /** Generates a Vercel-deployable project: api/mcp.ts + api/health.ts as serverless functions, sharing lib/ with the Node target's logic. */
 export async function generateVercelServer(options: GenerateOptions): Promise<GenerateResult> {
-  const { document, tools, outDir, authMode } = options;
+  const { document, tools, outDir, authMode, perUserCredential } = options;
   const { apiTitle, pkgSlug, baseUrlEnvVar, defaultBaseUrl, binding, warnings } = deriveMeta(document, authMode);
 
   const files: Record<string, string> = {
     "package.json": vercelPackageJsonTemplate(`${pkgSlug}-mcp`),
     "tsconfig.json": vercelTsconfigTemplate(),
     ".gitignore": vercelGitignoreTemplate(),
-    ".env.example": envExampleTemplate(binding, baseUrlEnvVar),
-    "README.md": vercelReadmeTemplate(apiTitle, binding, tools.length),
+    ".env.example": envExampleTemplate(binding, baseUrlEnvVar, perUserCredential),
+    "README.md": vercelReadmeTemplate(apiTitle, binding, tools.length, perUserCredential),
     "lib/types.ts": typesTemplate(),
     "lib/config.ts": configTemplate(baseUrlEnvVar, defaultBaseUrl),
-    "lib/auth.ts": authTemplate(binding),
+    "lib/auth.ts": authTemplate(binding, perUserCredential),
     "lib/access.ts": accessTemplate(binding),
     "lib/client.ts": clientTemplate(),
     "lib/tools.ts": toolsDataTemplate(tools),

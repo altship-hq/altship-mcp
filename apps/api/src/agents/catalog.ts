@@ -27,6 +27,14 @@ export async function loadCatalog(userId: string): Promise<{ servers: CatalogEnt
 
   await Promise.all(
     deployments.map(async (d) => {
+      if (d.audience === "customers") {
+        unavailable.push({
+          deploymentId: d.id,
+          title: d.apiTitle,
+          reason: "Offered to your customers; each person signs in with their own credential.",
+        });
+        return;
+      }
       if (d.authMode === "passthrough") {
         unavailable.push({
           deploymentId: d.id,

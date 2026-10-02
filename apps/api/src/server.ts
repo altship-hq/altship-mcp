@@ -17,26 +17,27 @@ import {
   listServerKeys,
   activeKeyHashes,
   revokeServerKey,
+  type ConnectSettings,
   type DeploymentRecord,
 } from "./store.js";
-import {
-  AccessKeyConfigError,
-  displayPrefix,
-  generateAccessKey,
-  hashAccessKey,
-  internalAccessKey,
-  oauthIssuer,
-} from "./access-keys.js";
+import { AccessKeyConfigError, displayPrefix, generateAccessKey, hashAccessKey } from "./access-keys.js";
+import { AudienceError, applyAccessEnv, parseAudience } from "./server-access.js";
 import { requireAuth, userIdOf } from "./auth.js";
 import { agentsRouter, agentsErrorHandler } from "./agents/router.js";
+import { endUsersRouter } from "./end-users/router.js";
+import { listConnections, revokeConnection } from "./end-users/store.js";
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "http://localhost:5173")
   .split(",")
   .map((o) => o.trim());
 
 export const app = express();
-app.use(cors({ origin: allowedOrigins }));
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
+// The end-user sign-in server (public, its own CORS) comes before the
+// dashboard API's origin-restricted CORS.
+app.use(endUsersRouter);
+app.use(cors({ origin: allowedOrigins }));
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
@@ -123,6 +124,14 @@ app.post("/api/deploy", async (req, res) => {
     return res.status(400).json({ error: "toolNames must be an array of strings." });
   }
 
+  let audience;
+  try {
+    audience = parseAudience(req.body?.audience);
+  } catch (err) {
+    if (err instanceof AudienceError) return res.status(400).json({ error: err.message });
+    throw err;
+  }
+
   const validation = await validateSpec(spec);
   if (!validation.document) {
     return res.status(422).json({ error: "Spec failed to validate.", issues: validation.issues });
@@ -136,16 +145,34 @@ app.post("/api/deploy", async (req, res) => {
 
   const apiTitle = validation.document.info?.title ?? "Generated API";
   const apiEnvSlug = envSlug(apiTitle) || "API";
-  const { binding } = deriveAuthBinding(validation.document, apiEnvSlug, { passthrough: authMode === "passthrough" });
+  const forCustomers = audience === "customers";
+  // For customers, each end user brings their own credential, so the shared
+  // and passthrough modes don't apply.
+  const { binding } = deriveAuthBinding(validation.document, apiEnvSlug, { passthrough: !forCustomers && authMode === "passthrough" });
 
-  if (binding.kind !== "none" && binding.kind !== "passthrough" && (typeof credentialValue !== "string" || credentialValue.trim() === "")) {
+  let connectSettings: ConnectSettings | null = null;
+  if (forCustomers) {
+    if (binding.kind === "none" || binding.kind === "passthrough") {
+      return res.status(400).json({
+        error: "To offer this server to your customers, the API's spec must declare how users authenticate (an API key, bearer token or basic auth).",
+      });
+    }
+    const helpText = typeof req.body?.connectHelpText === "string" ? req.body.connectHelpText.trim().slice(0, 300) : "";
+    connectSettings = { displayName: apiTitle, credentialKind: binding.kind, helpText: helpText || null };
+  } else if (binding.kind !== "none" && binding.kind !== "passthrough" && (typeof credentialValue !== "string" || credentialValue.trim() === "")) {
     return res.status(400).json({ error: `This API requires a credential (${binding.envVar}) to deploy.` });
   }
 
   const outDir = path.join(os.tmpdir(), `altship-mcp-deploy-${Date.now()}`);
 
   try {
-    const generated = await generateVercelServer({ document: validation.document, tools, outDir, authMode });
+    const generated = await generateVercelServer({
+      document: validation.document,
+      tools,
+      outDir,
+      authMode: forCustomers ? "static" : authMode,
+      perUserCredential: forCustomers,
+    });
 
     const files: Record<string, string> = {};
     for (const relativePath of generated.filesWritten) {
@@ -155,20 +182,19 @@ app.post("/api/deploy", async (req, res) => {
     const projectName = `${apiEnvSlug.toLowerCase().replace(/_/g, "-")}-mcp-${randomUUID().slice(0, 8)}`;
     const project = await ensureProject(projectName);
 
-    if (binding.envVar && typeof credentialValue === "string") {
+    if (!forCustomers && binding.envVar && typeof credentialValue === "string") {
       await setProjectEnvVar(project.id, binding.envVar, credentialValue);
     }
 
-    // Who may call the server: the owner's first access key, altship's own
-    // (Agent Creator) key, and the owner signed in through OAuth.
-    const accessKey = generateAccessKey();
-    await setProjectEnvVar(
-      project.id,
-      "MCP_ACCESS_KEY_SHA256",
-      [hashAccessKey(accessKey), hashAccessKey(internalAccessKey(project.id))].join(","),
-    );
-    await setProjectEnvVar(project.id, "MCP_OAUTH_ISSUER", oauthIssuer());
-    await setProjectEnvVar(project.id, "MCP_OAUTH_ALLOWED_SUBJECTS", userIdOf(req));
+    // Who may call the server. Private servers start with the owner's first
+    // access key; servers for customers are reached only by signed-in end users.
+    const accessKey = forCustomers ? null : generateAccessKey();
+    await applyAccessEnv({
+      audience,
+      projectId: project.id,
+      ownerId: userIdOf(req),
+      keyHashes: accessKey ? [hashAccessKey(accessKey)] : [],
+    });
 
     // Best-effort: gives the deployment a "<slug>.mcp.altship.io" URL
     // instead of a random *.vercel.app one. deployFiles() falls back
@@ -180,6 +206,7 @@ app.post("/api/deploy", async (req, res) => {
     const record = {
       id: deployment.id,
       userId: userIdOf(req),
+      audience,
       apiTitle,
       toolNames: tools.map((t) => t.name),
       projectName: project.name,
@@ -192,17 +219,20 @@ app.post("/api/deploy", async (req, res) => {
         sensitive: t.sensitive,
         inputSchema: t.inputSchema as unknown as Record<string, unknown>,
       })),
-      authMode,
+      authMode: forCustomers ? ("static" as const) : authMode,
+      connectSettings,
     };
     await recordDeployment(record);
-    await insertServerKey({
-      id: newKeyId(),
-      deploymentId: record.id,
-      userId: record.userId,
-      name: "Default",
-      prefix: displayPrefix(accessKey),
-      keyHash: hashAccessKey(accessKey),
-    });
+    if (accessKey) {
+      await insertServerKey({
+        id: newKeyId(),
+        deploymentId: record.id,
+        userId: record.userId,
+        name: "Default",
+        prefix: displayPrefix(accessKey),
+        keyHash: hashAccessKey(accessKey),
+      });
+    }
 
     res.json({
       ...record,
@@ -212,7 +242,7 @@ app.post("/api/deploy", async (req, res) => {
       warnings: generated.warnings,
     });
   } catch (err) {
-    if (err instanceof VercelConfigError || err instanceof AccessKeyConfigError) {
+    if (err instanceof VercelConfigError || err instanceof AccessKeyConfigError || err instanceof AudienceError) {
       return res.status(500).json({ error: err.message });
     }
     console.error("Deploy failed:", err);
@@ -227,13 +257,16 @@ app.post("/api/deploy", async (req, res) => {
 app.get("/api/deployments/:id/keys", async (req, res) => {
   const deployment = await getDeployment(String(req.params.id), userIdOf(req));
   if (!deployment) return res.status(404).json({ error: "MCP server not found." });
-  res.json(await listServerKeys(deployment.id, deployment.userId));
+  res.json(deployment.audience === "private" ? await listServerKeys(deployment.id, deployment.userId) : []);
 });
 
 // Creates a key and returns it in full -- the only time it's ever shown.
 app.post("/api/deployments/:id/keys", async (req, res) => {
   const deployment = await getDeployment(String(req.params.id), userIdOf(req));
   if (!deployment) return res.status(404).json({ error: "MCP server not found." });
+  if (deployment.audience !== "private") {
+    return res.status(400).json({ error: "Servers for your customers don't use access keys; each person signs in with their own credential." });
+  }
   const name = typeof req.body?.name === "string" && req.body.name.trim() ? req.body.name.trim().slice(0, 80) : "Untitled key";
 
   const key = generateAccessKey();
@@ -259,10 +292,31 @@ app.delete("/api/deployments/:id/keys/:keyId", async (req, res) => {
   res.json({ ok: true });
 });
 
-/** Pushes the deployment's current key hashes to its env and redeploys so they take effect. */
+// ---- End-user connections (servers for your customers) -------------------
+
+app.get("/api/deployments/:id/connections", async (req, res) => {
+  const deployment = await getDeployment(String(req.params.id), userIdOf(req));
+  if (!deployment) return res.status(404).json({ error: "MCP server not found." });
+  res.json(deployment.audience === "customers" ? await listConnections(deployment.id) : []);
+});
+
+app.delete("/api/deployments/:id/connections/:connectionId", async (req, res) => {
+  const deployment = await getDeployment(String(req.params.id), userIdOf(req));
+  if (!deployment) return res.status(404).json({ error: "MCP server not found." });
+  if (!(await revokeConnection(String(req.params.connectionId), deployment.id))) {
+    return res.status(404).json({ error: "Connection not found." });
+  }
+  res.json({ ok: true });
+});
+
+/** Pushes the deployment's current access settings to its env and redeploys so they take effect. */
 async function syncAccessKeys(deployment: DeploymentRecord) {
-  const hashes = [...(await activeKeyHashes(deployment.id)), hashAccessKey(internalAccessKey(deployment.projectId))];
-  await setProjectEnvVar(deployment.projectId, "MCP_ACCESS_KEY_SHA256", hashes.join(","));
+  await applyAccessEnv({
+    audience: deployment.audience,
+    projectId: deployment.projectId,
+    ownerId: deployment.userId,
+    keyHashes: await activeKeyHashes(deployment.id),
+  });
   await redeploy({ id: deployment.projectId, name: deployment.projectName }, deployment.id);
 }
 

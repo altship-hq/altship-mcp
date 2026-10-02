@@ -3,6 +3,7 @@ import {
   deployToVercel,
   generateServer,
   importSpec,
+  type Audience,
   type AuthMode,
   type AuthRequirement,
   type DeployResponse,
@@ -31,6 +32,8 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
   const [passthroughAvailable, setPassthroughAvailable] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode>("static");
   const [credentialValue, setCredentialValue] = useState("");
+  const [audience, setAudience] = useState<Audience>("private");
+  const [connectHelpText, setConnectHelpText] = useState("");
 
   const [generateResult, setGenerateResult] = useState<GenerateResponse | null>(null);
   const [deployResult, setDeployResult] = useState<DeployResponse | null>(null);
@@ -43,7 +46,10 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
   }, [tools, filter]);
   const visibleGroups = useMemo(() => groupByNamespace(visibleTools), [visibleTools]);
   const selectedCount = Object.values(selected).filter(Boolean).length;
-  const needsCredential = platform === "vercel" && authRequirement !== null && authMode === "static";
+  const forCustomers = platform === "vercel" && audience === "customers";
+  // Servers for customers need the spec to say how users authenticate, since each brings their own credential.
+  const customersAvailable = authRequirement !== null;
+  const needsCredential = platform === "vercel" && !forCustomers && authRequirement !== null && authMode === "static";
 
   async function handleImport() {
     setLoading(true);
@@ -78,7 +84,12 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
         .map(([name]) => name);
 
       if (platform === "vercel") {
-        const result = await deployToVercel(specInput.trim(), toolNames, authMode, credentialValue || undefined);
+        const result = await deployToVercel(specInput.trim(), toolNames, {
+          authMode: forCustomers ? "static" : authMode,
+          credentialValue: forCustomers ? undefined : credentialValue || undefined,
+          audience: forCustomers ? "customers" : "private",
+          connectHelpText: forCustomers ? connectHelpText.trim() || undefined : undefined,
+        });
         setDeployResult(result);
         onDeployed?.(result);
       } else {
@@ -240,7 +251,56 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
             </div>
           </div>
 
-          {passthroughAvailable && (
+          {platform === "vercel" && (
+            <div className="config-section">
+              <h3>Who is this for?</h3>
+              <div className="option-grid">
+                <label className="option">
+                  <input type="radio" name="audience" checked={audience === "private"} onChange={() => setAudience("private")} />
+                  <span>
+                    <strong>Private</strong>
+                    <small>You and your team. Connect with access keys, or sign in with your altship account.</small>
+                  </span>
+                </label>
+                <label className={customersAvailable ? "option" : "option option-disabled"} aria-disabled={!customersAvailable}>
+                  <input
+                    type="radio"
+                    name="audience"
+                    checked={audience === "customers"}
+                    disabled={!customersAvailable}
+                    onChange={() => setAudience("customers")}
+                  />
+                  <span>
+                    <strong>For your customers</strong>
+                    <small>
+                      {customersAvailable
+                        ? "Your product's users connect from Claude or ChatGPT with their own API key. No altship account needed."
+                        : "Needs the spec to declare how users authenticate (API key, bearer token or basic auth)."}
+                    </small>
+                  </span>
+                </label>
+              </div>
+            </div>
+          )}
+
+          {forCustomers && (
+            <div className="config-section">
+              <h3>
+                <label htmlFor="connect-help">Where do your users find their {authRequirement?.kind === "basic" ? "login" : "API key"}?</label>
+              </h3>
+              <p className="hint">Optional. Shown on the page your users see when they connect, e.g. "In {apiTitle ?? "your app"}, go to Settings → API."</p>
+              <input
+                id="connect-help"
+                type="text"
+                maxLength={300}
+                value={connectHelpText}
+                onChange={(e) => setConnectHelpText(e.target.value)}
+                placeholder="Settings → Developers → API keys"
+              />
+            </div>
+          )}
+
+          {passthroughAvailable && !forCustomers && (
             <div className="config-section">
               <h3>Auth model</h3>
               <div className="option-grid">
@@ -305,10 +365,12 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
         <section className="card">
           <h2>Deployed</h2>
           <p className="subtitle">
-            <code>{deployResult.projectName}</code> is live, exposing {deployResult.toolNames.length} tool(s). Every request needs
-            an access key or an OAuth sign-in.
+            <code>{deployResult.projectName}</code> is live, exposing {deployResult.toolNames.length} tool(s).{" "}
+            {deployResult.audience === "customers"
+              ? "Your users connect with their own API key."
+              : "Every request needs an access key or an OAuth sign-in."}
           </p>
-          <ConnectPanel deployment={deployResult} accessKey={deployResult.accessKey} />
+          <ConnectPanel deployment={deployResult} accessKey={deployResult.accessKey ?? undefined} />
           {deployResult.warnings.length > 0 && (
             <div className="banner warning">
               {deployResult.warnings.map((w) => (

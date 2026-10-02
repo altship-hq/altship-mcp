@@ -1079,3 +1079,19 @@
 .dash .servers .row-action a + a {
   margin-left: 14px;
 }
+
+.dash .audience-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  max-width: 680px;
+  margin: 0 0 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.dash .audience-row span {
+  color: var(--muted);
+}

@@ -552,3 +552,24 @@ button.link {
     grid-column: 2;
   }
 }
+
+.dash .builder .option-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.dash .builder .option-disabled:hover {
+  border-color: inherit;
+}
+
+.dash .builder .option .soon-tag {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  vertical-align: 2px;
+}
