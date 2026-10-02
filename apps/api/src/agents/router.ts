@@ -6,21 +6,28 @@ import { AgentConfigError } from "./anthropic.js";
 import { loadCatalog, toToolCatalog } from "./catalog.js";
 import { planAgent, PlannerError } from "./planner.js";
 import { confirmToolCall, createManagedAgents, followSession, sendUserMessage, startSession } from "./runtime.js";
+import { requireAuth, userIdOf } from "../auth.js";
 import { getAgent, getRun, insertAgent, insertRun, listAgents, listRuns, updateRun, type AgentRecord } from "./store.js";
 
-// Agent Creator API. No auth yet (pre-launch, by decision) — when sign-in
-// comes back, it goes in front of this router, and the deployed-endpoint
-// routes (/:id/run...) get their own API-key check.
+// Agent Creator API. Dashboard routes need a signed-in user and only see that
+// user's agents. The deployed-endpoint routes (/:id/run, /:id/runs/:sid...)
+// are called by the agent's own clients, not the dashboard, so they stay open
+// until they get their own API-key check.
 
 export const agentsRouter = Router();
+
+/** Matches the deployed-endpoint routes; GET /:id/runs (the dashboard's run list) is not one. */
+const ENDPOINT_ROUTE = /^\/[^/]+\/(run|runs\/[^/]+(\/confirm)?)$/;
+
+agentsRouter.use((req, res, next) => (ENDPOINT_ROUTE.test(req.path) ? next() : requireAuth(req, res, next)));
 
 /** How long a request may wait on an agent before returning "running". */
 const RUN_WAIT_MS = 120_000;
 /** Playground streams end before the hosting function's time limit; the client reconnects. */
 const STREAM_MAX_MS = 240_000;
 
-agentsRouter.get("/catalog", async (_req, res) => {
-  res.json(await loadCatalog());
+agentsRouter.get("/catalog", async (req, res) => {
+  res.json(await loadCatalog(userIdOf(req)));
 });
 
 agentsRouter.post("/plan", async (req, res) => {
@@ -28,7 +35,7 @@ agentsRouter.post("/plan", async (req, res) => {
   const description = typeof req.body?.description === "string" ? req.body.description.trim() : "";
   if (!name || !description) return res.status(400).json({ error: "Give the agent a name and a description." });
 
-  const { servers } = await loadCatalog();
+  const { servers } = await loadCatalog(userIdOf(req));
   const focus = typeof req.body?.focusDeploymentId === "string" ? servers.find((s) => s.deploymentId === req.body.focusDeploymentId) : undefined;
   const plan = await planAgent(
     {
@@ -45,13 +52,14 @@ agentsRouter.post("/plan", async (req, res) => {
 
 // Approve: create the Managed Agents and save the agent.
 agentsRouter.post("/", async (req, res) => {
-  const { servers } = await loadCatalog();
+  const { servers } = await loadCatalog(userIdOf(req));
   const catalog = toToolCatalog(servers);
   const plan = validatePlan(req.body?.plan, catalog);
 
   const { coordinator, specialists } = await createManagedAgents(plan, catalog);
   const record = await insertAgent({
     id: `agt_${randomUUID().replace(/-/g, "").slice(0, 16)}`,
+    userId: userIdOf(req),
     name: plan.name,
     description: plan.description,
     plan,
@@ -62,8 +70,8 @@ agentsRouter.post("/", async (req, res) => {
   res.status(201).json(record);
 });
 
-agentsRouter.get("/", async (_req, res) => {
-  res.json(await listAgents());
+agentsRouter.get("/", async (req, res) => {
+  res.json(await listAgents(userIdOf(req)));
 });
 
 agentsRouter.get("/:id", async (req, res) => {
@@ -192,8 +200,9 @@ async function runResponse(sessionId: string, tracker: Awaited<ReturnType<typeof
   };
 }
 
+/** Loads the agent named in the URL; on dashboard routes, only if the signed-in user owns it. */
 async function requireAgent(req: Request, res: Response): Promise<AgentRecord | null> {
-  const agent = await getAgent(String(req.params.id));
+  const agent = await getAgent(String(req.params.id), req.userId);
   if (!agent) res.status(404).json({ error: "Agent not found." });
   return agent;
 }

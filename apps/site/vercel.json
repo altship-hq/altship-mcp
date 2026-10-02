@@ -1,3 +1,0 @@
-{
-  "rewrites": [{ "source": "/mcp/:path*", "destination": "/:path*" }]
-}

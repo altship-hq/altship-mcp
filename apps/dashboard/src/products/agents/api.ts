@@ -1,4 +1,4 @@
-import { API_BASE, getJson, postJson } from "../../http.js";
+import { API_BASE, apiFetch, getJson, postJson } from "../../http.js";
 
 // Mirrors apps/api/src/agents (router, events) and packages/agent-design types.
 
@@ -137,31 +137,61 @@ export function confirmPlaygroundTool(id: string, sessionId: string, toolCallId:
  * Follows a playground session over SSE. The server replays the session's
  * events so far, then streams live ones until the turn settles and sends
  * `done`; callers dedupe by event id. Returns a function that stops following.
+ * Reads the stream with fetch (not EventSource) so it can send the user's token.
  */
 export function followPlaygroundSession(
   id: string,
   sessionId: string,
   handlers: { onEvent: (event: AgentUiEvent) => void; onDone: (status: RunStatus) => void; onError: (message: string) => void },
 ): () => void {
-  const source = new EventSource(`${API_BASE}/api/agents/${id}/sessions/${sessionId}/stream`);
-  source.onmessage = (e) => handlers.onEvent(JSON.parse(e.data) as AgentUiEvent);
-  source.addEventListener("done", (e) => {
-    source.close();
-    handlers.onDone((JSON.parse((e as MessageEvent).data) as { status: RunStatus }).status);
-  });
-  source.addEventListener("failure", (e) => {
-    source.close();
-    handlers.onError((JSON.parse((e as MessageEvent).data) as { error: string }).error);
-  });
-  source.onerror = () => {
-    // A dropped connection (not a server-reported failure): the browser would
-    // retry forever; stop and let the caller resume on the next action.
-    if (source.readyState === EventSource.CLOSED || source.readyState === EventSource.CONNECTING) {
-      source.close();
-      handlers.onError("Lost the connection to the agent. Send another message or refresh to resume.");
+  const abort = new AbortController();
+  let finished = false;
+
+  const dispatch = (event: string, data: string) => {
+    if (event === "done") {
+      finished = true;
+      handlers.onDone((JSON.parse(data) as { status: RunStatus }).status);
+    } else if (event === "failure") {
+      finished = true;
+      handlers.onError((JSON.parse(data) as { error: string }).error);
+    } else {
+      handlers.onEvent(JSON.parse(data) as AgentUiEvent);
     }
   };
-  return () => source.close();
+
+  (async () => {
+    const res = await apiFetch(`/api/agents/${id}/sessions/${sessionId}/stream`, { signal: abort.signal });
+    if (!res.ok || !res.body) throw new Error(`Stream failed with ${res.status}`);
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += value;
+      let boundary: number;
+      while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        let event = "message";
+        const data: string[] = [];
+        for (const line of block.split("\n")) {
+          if (line.startsWith("event: ")) event = line.slice(7);
+          else if (line.startsWith("data: ")) data.push(line.slice(6));
+        }
+        if (data.length) dispatch(event, data.join("\n"));
+      }
+    }
+  })()
+    .catch(() => undefined)
+    .finally(() => {
+      // A dropped connection (not a server-reported failure): stop and let
+      // the caller resume on the next action.
+      if (!finished && !abort.signal.aborted) {
+        handlers.onError("Lost the connection to the agent. Send another message or refresh to resume.");
+      }
+    });
+
+  return () => abort.abort();
 }
 
 export function endpointUrl(id: string): string {

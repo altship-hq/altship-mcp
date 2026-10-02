@@ -1,4 +1,6 @@
 import { useEffect } from "react";
+import type { Session } from "@supabase/supabase-js";
+import { signOut } from "./auth.js";
 import { Icon, PRODUCTS } from "./products.js";
 import { Link } from "./router.js";
 import Home from "./Home.js";
@@ -17,7 +19,7 @@ function resolve(path: string) {
   return { product, subpath, page, isHome: path === "" };
 }
 
-export default function Shell({ path }: { path: string }) {
+export default function Shell({ path, session }: { path: string; session: Session }) {
   const { product, subpath, page, isHome } = resolve(path);
   const title = isHome ? "Home" : product && page ? `${page.label} · ${product.name}` : "Not found";
 
@@ -92,6 +94,14 @@ export default function Shell({ path }: { path: string }) {
                 <strong>{isHome ? "Home" : page!.label}</strong>
               </>
             )}
+          </div>
+          <div className="account">
+            <span className="account-email" title={session.user.email}>
+              {session.user.email}
+            </span>
+            <button type="button" className="account-signout" onClick={() => signOut()}>
+              Sign out
+            </button>
           </div>
         </header>
 

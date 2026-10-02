@@ -17,8 +17,8 @@ export interface UnavailableServer {
  * Tools come from what was stored at deploy time, or — for deployments
  * recorded before that — a live `tools/list` against the server.
  */
-export async function loadCatalog(): Promise<{ servers: CatalogEntry[]; unavailable: UnavailableServer[] }> {
-  const deployments = await listDeployments();
+export async function loadCatalog(userId: string): Promise<{ servers: CatalogEntry[]; unavailable: UnavailableServer[] }> {
+  const deployments = await listDeployments(userId);
   const servers: CatalogEntry[] = [];
   const unavailable: UnavailableServer[] = [];
 

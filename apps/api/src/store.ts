@@ -11,6 +11,7 @@ export interface DeployedTool {
 
 export interface DeploymentRecord {
   id: string;
+  userId: string;
   createdAt: string;
   apiTitle: string;
   toolNames: string[];
@@ -24,6 +25,7 @@ export interface DeploymentRecord {
 
 interface DeploymentRow {
   id: string;
+  user_id: string;
   created_at: string;
   api_title: string;
   tool_names: string[];
@@ -37,6 +39,7 @@ interface DeploymentRow {
 function fromRow(row: DeploymentRow): DeploymentRecord {
   return {
     id: row.id,
+    userId: row.user_id,
     createdAt: row.created_at,
     apiTitle: row.api_title,
     toolNames: row.tool_names,
@@ -48,10 +51,11 @@ function fromRow(row: DeploymentRow): DeploymentRecord {
   };
 }
 
-export async function listDeployments(): Promise<DeploymentRecord[]> {
+export async function listDeployments(userId: string): Promise<DeploymentRecord[]> {
   const { data, error } = await getSupabase()
     .from("deployments")
     .select("*")
+    .eq("user_id", userId)
     .order("created_at", { ascending: false });
 
   if (error) throw new Error(`Failed to list deployments: ${error.message}`);
@@ -63,6 +67,7 @@ export async function recordDeployment(record: Omit<DeploymentRecord, "createdAt
     .from("deployments")
     .insert({
       id: record.id,
+      user_id: record.userId,
       api_title: record.apiTitle,
       tool_names: record.toolNames,
       project_name: record.projectName,
@@ -75,8 +80,8 @@ export async function recordDeployment(record: Omit<DeploymentRecord, "createdAt
   if (error) throw new Error(`Failed to record deployment: ${error.message}`);
 }
 
-export async function getDeployment(id: string): Promise<DeploymentRecord | null> {
-  const { data, error } = await getSupabase().from("deployments").select("*").eq("id", id).maybeSingle();
+export async function getDeployment(id: string, userId: string): Promise<DeploymentRecord | null> {
+  const { data, error } = await getSupabase().from("deployments").select("*").eq("id", id).eq("user_id", userId).maybeSingle();
   if (error) throw new Error(`Failed to load deployment: ${error.message}`);
   return data ? fromRow(data as DeploymentRow) : null;
 }

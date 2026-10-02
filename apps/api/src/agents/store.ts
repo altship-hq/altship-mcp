@@ -3,6 +3,7 @@ import { getSupabase } from "../supabase.js";
 
 export interface AgentRecord {
   id: string;
+  userId: string;
   createdAt: string;
   name: string;
   description: string;
@@ -14,6 +15,7 @@ export interface AgentRecord {
 
 interface AgentRow {
   id: string;
+  user_id: string;
   created_at: string;
   name: string;
   description: string;
@@ -51,6 +53,7 @@ const PREVIEW_LENGTH = 280;
 function fromAgentRow(row: AgentRow): AgentRecord {
   return {
     id: row.id,
+    userId: row.user_id,
     createdAt: row.created_at,
     name: row.name,
     description: row.description,
@@ -83,6 +86,7 @@ export async function insertAgent(record: Omit<AgentRecord, "createdAt">): Promi
     .from("agents")
     .insert({
       id: record.id,
+      user_id: record.userId,
       name: record.name,
       description: record.description,
       plan: record.plan,
@@ -96,14 +100,21 @@ export async function insertAgent(record: Omit<AgentRecord, "createdAt">): Promi
   return fromAgentRow(data as AgentRow);
 }
 
-export async function listAgents(): Promise<AgentRecord[]> {
-  const { data, error } = await getSupabase().from("agents").select("*").order("created_at", { ascending: false });
+export async function listAgents(userId: string): Promise<AgentRecord[]> {
+  const { data, error } = await getSupabase()
+    .from("agents")
+    .select("*")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false });
   if (error) throw new Error(`Failed to list agents: ${error.message}`);
   return (data as AgentRow[]).map(fromAgentRow);
 }
 
-export async function getAgent(id: string): Promise<AgentRecord | null> {
-  const { data, error } = await getSupabase().from("agents").select("*").eq("id", id).maybeSingle();
+/** With a userId, only finds the agent if that user owns it. */
+export async function getAgent(id: string, userId?: string): Promise<AgentRecord | null> {
+  let query = getSupabase().from("agents").select("*").eq("id", id);
+  if (userId) query = query.eq("user_id", userId);
+  const { data, error } = await query.maybeSingle();
   if (error) throw new Error(`Failed to load agent: ${error.message}`);
   return data ? fromAgentRow(data as AgentRow) : null;
 }

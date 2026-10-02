@@ -1,5 +1,5 @@
 import "dotenv/config";
-import express from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +10,7 @@ import { designTools } from "@altship/tool-design";
 import { generateServer, generateVercelServer, deriveAuthBinding, envSlug } from "@altship/mcp-gen";
 import { ensureProject, setProjectEnvVar, assignMcpSubdomain, deployFiles, VercelConfigError } from "./vercel-client.js";
 import { recordDeployment, listDeployments } from "./store.js";
+import { requireAuth, userIdOf } from "./auth.js";
 import { agentsRouter, agentsErrorHandler } from "./agents/router.js";
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "http://localhost:5173")
@@ -25,6 +26,9 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.use("/api/agents", agentsRouter, agentsErrorHandler);
+
+// Everything else is the MCP Creator dashboard API: signed-in users only.
+app.use(["/api/tools", "/api/generate", "/api/deployments", "/api/deploy"], requireAuth);
 
 app.post("/api/tools", async (req, res) => {
   const spec = req.body?.spec;
@@ -85,8 +89,8 @@ app.post("/api/generate", async (req, res) => {
   res.json(result);
 });
 
-app.get("/api/deployments", async (_req, res) => {
-  res.json(await listDeployments());
+app.get("/api/deployments", async (req, res) => {
+  res.json(await listDeployments(userIdOf(req)));
 });
 
 app.post("/api/deploy", async (req, res) => {
@@ -147,6 +151,7 @@ app.post("/api/deploy", async (req, res) => {
 
     const record = {
       id: deployment.id,
+      userId: userIdOf(req),
       apiTitle,
       toolNames: tools.map((t) => t.name),
       projectName: project.name,
@@ -175,3 +180,10 @@ app.post("/api/deploy", async (req, res) => {
   }
 });
 
+// Unhandled errors come back as JSON (Express's default is an HTML page,
+// which the dashboard can't show).
+app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
+  if (res.headersSent) return next(err);
+  console.error("API error:", err);
+  res.status(500).json({ error: err instanceof Error ? err.message : "Something went wrong." });
+});
