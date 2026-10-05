@@ -25,6 +25,9 @@ create index if not exists deployments_user_id_idx on deployments (user_id, crea
 alter table deployments add column if not exists audience text not null default 'private'
   check (audience in ('private', 'customers'));
 
+-- The owner's own name for the server. Null means "use the spec's title" (api_title).
+alter table deployments add column if not exists name text;
+
 alter table deployments enable row level security;
 
 -- Only the API server (service_role key, bypasses RLS) reads or writes these
@@ -200,3 +203,31 @@ alter table deployment_invites enable row level security;
 
 -- From an earlier version that looked accounts up by email; no longer used.
 drop function if exists altship_user_id_by_email(text);
+
+-- ---- Observability: tool calls on managed MCP servers -----------------------
+-- One row per tool call, exported by the server as an OpenTelemetry span and
+-- ingested at /api/otel/v1/traces. Records who called which tool, how it went
+-- and how long it took -- never arguments, responses or credentials.
+create table if not exists tool_calls (
+  id uuid primary key default gen_random_uuid(),
+  deployment_id text not null references deployments(id) on delete cascade,
+  started_at timestamptz not null,
+  tool text not null,
+  ok boolean not null,
+  -- unknown_tool | invalid_input | upstream_error | request_failed
+  error_type text,
+  -- The upstream API's HTTP status, when a request was made.
+  http_status integer,
+  duration_ms integer not null,
+  -- key | user | end-user | anonymous | local
+  caller_kind text not null,
+  -- key: first 12 hex characters of the access key's SHA-256 hash;
+  -- user: altship user id; end-user: end_user_connections.id.
+  caller_id text,
+  trace_id text,
+  span_id text
+);
+
+create index if not exists tool_calls_deployment_idx on tool_calls (deployment_id, started_at desc);
+
+alter table tool_calls enable row level security;

@@ -8,6 +8,7 @@ import {
   listMembers,
   mcpUrl,
   removeMember,
+  renameDeployment,
   revokeAccessKey,
   revokeConnection,
   type AccessKey,
@@ -18,6 +19,7 @@ import {
 } from "./api.js";
 import { Link } from "../../router.js";
 import { PageHead } from "../../ui.js";
+import { ToolCallLog } from "../observability/ObservabilityProduct.js";
 
 // How clients connect to a managed MCP server. Private servers: endpoint,
 // access keys (shown in full once, when created) and OAuth sign-in for chat
@@ -382,8 +384,87 @@ function People({ deployment }: { deployment: DeploymentRecord }) {
   );
 }
 
+/** The server's name as the page heading, with a way to change it. */
+function ServerHead({ deployment, onRenamed }: { deployment: DeploymentRecord; onRenamed?: (renamed: DeploymentRecord) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(deployment.name);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const description = `${deployment.toolNames.length} tools · ${deployment.projectName}`;
+
+  function start() {
+    setName(deployment.name);
+    setError(null);
+    setEditing(true);
+  }
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      onRenamed?.(await renameDeployment(deployment.id, name));
+      setEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+    setBusy(false);
+  }
+
+  if (!editing) {
+    return (
+      <PageHead
+        title={deployment.name}
+        description={description}
+        action={
+          <button type="button" className="btn" onClick={start}>
+            Rename
+          </button>
+        }
+      />
+    );
+  }
+
+  return (
+    <div className="page-head">
+      <div className="rename">
+        {error && <div className="notice">{error}</div>}
+        <form className="key-form" onSubmit={save}>
+          <input
+            type="text"
+            aria-label="Server name"
+            placeholder={deployment.apiTitle}
+            value={name}
+            maxLength={80}
+            autoFocus
+            onChange={(e) => setName(e.target.value)}
+            disabled={busy}
+          />
+          <button type="submit" className="btn" disabled={busy}>
+            {busy ? "Saving…" : "Save"}
+          </button>
+          <button type="button" className="copy-button" disabled={busy} onClick={() => setEditing(false)}>
+            Cancel
+          </button>
+        </form>
+        <p>Leave it empty to use the spec's title, {deployment.apiTitle}.</p>
+      </div>
+    </div>
+  );
+}
+
 /** /mcp/servers/<id>: one server's endpoint, people and access keys. */
-export function ServerPage({ deploymentId, deployments, loading }: { deploymentId: string; deployments: DeploymentRecord[]; loading: boolean }) {
+export function ServerPage({
+  deploymentId,
+  deployments,
+  loading,
+  onRenamed,
+}: {
+  deploymentId: string;
+  deployments: DeploymentRecord[];
+  loading: boolean;
+  onRenamed?: (renamed: DeploymentRecord) => void;
+}) {
   const deployment = deployments.find((d) => d.id === deploymentId);
   const [keys, setKeys] = useState<AccessKey[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -414,7 +495,7 @@ export function ServerPage({ deploymentId, deployments, loading }: { deploymentI
   if (deployment.audience === "customers") {
     return (
       <>
-        <PageHead title={deployment.apiTitle} description={`${deployment.toolNames.length} tools · ${deployment.projectName}`} />
+        <ServerHead deployment={deployment} onRenamed={onRenamed} />
         <section className="dash-section">
           <h2>Who it's for</h2>
           <div className="audience-row">
@@ -427,6 +508,13 @@ export function ServerPage({ deploymentId, deployments, loading }: { deploymentI
           <ConnectPanel deployment={deployment} />
         </section>
         <Connections deployment={deployment} />
+        <section className="dash-section">
+          <div className="section-row">
+            <h2>Recent calls</h2>
+            <Link to="observability">All logs →</Link>
+          </div>
+          <ToolCallLog deploymentId={deployment.id} pageSize={10} />
+        </section>
       </>
     );
   }
@@ -463,7 +551,7 @@ export function ServerPage({ deploymentId, deployments, loading }: { deploymentI
 
   return (
     <>
-      <PageHead title={deployment.apiTitle} description={`${deployment.toolNames.length} tools · ${deployment.projectName}`} />
+      <ServerHead deployment={deployment} onRenamed={onRenamed} />
       {error && <div className="notice">{error}</div>}
 
       <section className="dash-section">
@@ -550,6 +638,13 @@ export function ServerPage({ deploymentId, deployments, loading }: { deploymentI
             {busy ? "Working…" : "Create key"}
           </button>
         </form>
+      </section>
+      <section className="dash-section">
+        <div className="section-row">
+          <h2>Recent calls</h2>
+          <Link to="observability">All logs →</Link>
+        </div>
+        <ToolCallLog deploymentId={deployment.id} pageSize={10} />
       </section>
     </>
   );

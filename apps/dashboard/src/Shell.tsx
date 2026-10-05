@@ -6,6 +6,7 @@ import { Link } from "./router.js";
 import Home from "./Home.js";
 import McpProduct from "./products/mcp/McpProduct.js";
 import AgentsProduct from "./products/agents/AgentsProduct.js";
+import ObservabilityProduct from "./products/observability/ObservabilityProduct.js";
 import logoMark from "./assets/logo-mark.png";
 
 // pilot.altship.io: one dashboard for every altship product. Sidebar + top
@@ -107,6 +108,8 @@ export default function Shell({ path, session }: { path: string; session: Sessio
             <McpProduct subpath={subpath} />
           ) : product?.id === "agents" && page ? (
             <AgentsProduct subpath={subpath} />
+          ) : product?.id === "observability" && page ? (
+            <ObservabilityProduct />
           ) : (
             <div className="empty">
               <p>This page doesn't exist.</p>

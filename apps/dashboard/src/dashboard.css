@@ -1057,6 +1057,49 @@
   cursor: pointer;
 }
 
+.dash .page-head button.btn {
+  border: 0;
+  cursor: pointer;
+}
+
+/* Logs (tool calls) */
+.dash .logs code {
+  font-size: 12px;
+}
+
+.dash .log-result {
+  font-size: 12px;
+  color: #1f7a3d;
+}
+
+.dash .log-result.log-failed {
+  color: #a3231f;
+}
+
+.dash .log-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.dash .log-filter {
+  padding: 8px 10px;
+  border: 1px solid #d4d4d4;
+  border-radius: 2px;
+  background: #fff;
+  font: inherit;
+  font-size: 13px;
+}
+
+/* Renaming a server, in place of the page heading */
+.dash .page-head .rename {
+  flex: 1;
+}
+
+.dash .page-head .rename .key-form {
+  margin: 0 0 8px;
+}
+
 .dash .link-danger {
   padding: 0;
   background: none;

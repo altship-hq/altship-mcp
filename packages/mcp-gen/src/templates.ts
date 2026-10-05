@@ -193,9 +193,15 @@ const jwks = issuer
 export const OAUTH_ENABLED = Boolean(issuer && !PASSTHROUGH);
 
 export type Headers = Record<string, string | string[] | undefined>;
+/**
+ * Who is calling, for the audit log: an access key (identified by the first
+ * 12 hex characters of its SHA-256 hash, never the key), a signed-in user or
+ * end user (their token's subject), or nobody when access checks are off.
+ */
+export type Caller = { kind: "key" | "user" | "end-user" | "anonymous" | "local"; id?: string };
 /** On success, \`credential\` is the caller's own upstream credential when their token carries one. */
 export type AccessResult =
-  | { ok: true; credential?: string }
+  | { ok: true; caller: Caller; credential?: string }
   | { ok: false; status: number; message: string; wwwAuthenticate?: string };
 
 function header(headers: Headers, name: string): string | undefined {
@@ -207,9 +213,11 @@ function bearer(headers: Headers): string | undefined {
   return header(headers, "authorization")?.match(/^Bearer\\s+(.+)$/i)?.[1];
 }
 
-function isAccessKey(candidate: string): boolean {
+/** The caller for an accepted access key, or undefined if the key isn't one of ours. */
+function keyCaller(candidate: string): Caller | undefined {
   const hash = createHash("sha256").update(candidate).digest();
-  return keyHashes.some((expected) => expected.length === hash.length && timingSafeEqual(expected, hash));
+  const accepted = keyHashes.some((expected) => expected.length === hash.length && timingSafeEqual(expected, hash));
+  return accepted ? { kind: "key", id: hash.toString("hex").slice(0, 12) } : undefined;
 }
 
 /** Decrypts an AES-256-GCM value encoded as base64url(iv[12] | ciphertext | tag[16]). */
@@ -228,17 +236,19 @@ function decryptCredential(sealed: string): string | undefined {
 /**
  * Verifies an OAuth access token. Accepted when it's signed by the issuer and
  * either names an allowed subject or was issued for this server's audience.
- * Returns null if not accepted, or the caller's own credential if it carries one.
+ * Returns null if not accepted; otherwise the token's subject, and the caller's
+ * own credential if it carries one.
  */
-async function verifyToken(token: string): Promise<{ credential?: string } | null> {
+async function verifyToken(token: string): Promise<{ subject?: string; credential?: string } | null> {
   if (!jwks || !issuer) return null;
   try {
     const { payload } = await jwtVerify(token, jwks, { issuer, ...(audience ? { audience } : {}) });
     const subjectAllowed = typeof payload.sub === "string" && allowedSubjects.has(payload.sub);
     if (!subjectAllowed && !(audience && allowedSubjects.size === 0)) return null;
-    if (typeof payload.upc !== "string") return {};
+    const subject = typeof payload.sub === "string" ? payload.sub : undefined;
+    if (typeof payload.upc !== "string") return { subject };
     const credential = decryptCredential(payload.upc);
-    return credential === undefined ? null : { credential };
+    return credential === undefined ? null : { subject, credential };
   } catch {
     return null;
   }
@@ -261,7 +271,7 @@ export function protectedResourceMetadata(headers: Headers, mcpPath: string) {
 }
 
 export async function checkAccess(headers: Headers): Promise<AccessResult> {
-  if (process.env.MCP_ALLOW_UNAUTHENTICATED === "true") return { ok: true };
+  if (process.env.MCP_ALLOW_UNAUTHENTICATED === "true") return { ok: true, caller: { kind: "anonymous" } };
   if (keyHashes.length === 0 && !OAUTH_ENABLED) {
     return {
       ok: false,
@@ -271,13 +281,18 @@ export async function checkAccess(headers: Headers): Promise<AccessResult> {
   }
 
   const headerKey = header(headers, ACCESS_KEY_HEADER);
-  if (headerKey && isAccessKey(headerKey)) return { ok: true };
+  const headerCaller = headerKey ? keyCaller(headerKey) : undefined;
+  if (headerCaller) return { ok: true, caller: headerCaller };
 
   if (!PASSTHROUGH) {
     const token = bearer(headers);
-    if (token && isAccessKey(token)) return { ok: true };
+    const bearerCaller = token ? keyCaller(token) : undefined;
+    if (bearerCaller) return { ok: true, caller: bearerCaller };
     const verified = token ? await verifyToken(token) : null;
-    if (verified) return { ok: true, credential: verified.credential };
+    if (verified) {
+      const kind = verified.credential === undefined ? "user" : "end-user";
+      return { ok: true, caller: { kind, id: verified.subject }, credential: verified.credential };
+    }
   }
 
   return {
@@ -501,6 +516,151 @@ export async function executeTool(
 }
 
 /**
+ * The audit log and telemetry for tool calls, shared by every target.
+ * Standard OpenTelemetry env vars only, so it exports to any OTLP collector:
+ *
+ *   OTEL_EXPORTER_OTLP_ENDPOINT         collector base URL; spans go to <it>/v1/traces
+ *   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT  or the full traces URL
+ *   OTEL_EXPORTER_OTLP_HEADERS          optional "name=value,name2=value2" request headers
+ *   OTEL_SERVICE_NAME                   optional; defaults to the package name
+ */
+export function telemetryTemplate(serviceName: string): string {
+  return `// Generated by altship-mcp. Do not hand-edit — regenerate from the source spec instead.
+//
+// Audit log and telemetry for tool calls. Every call is written to stderr as
+// one JSON line (stdout is the MCP channel in stdio mode). When an
+// OpenTelemetry collector is configured, each call is also exported to it as
+// a span over OTLP/HTTP (JSON), using the standard OTEL_* environment
+// variables -- point them at any collector.
+//
+// What's recorded: the tool, who called it, whether it worked, the upstream
+// HTTP status and how long it took. Never arguments, responses or credentials.
+import { randomBytes } from "node:crypto";
+import type { Caller } from "./access.js";
+
+export interface ToolCallOutcome {
+  ok: boolean;
+  /** Why it failed: the tool doesn't exist, the input didn't match its schema, the API returned an error, or the request couldn't be made. */
+  errorType?: "unknown_tool" | "invalid_input" | "upstream_error" | "request_failed";
+  /** The upstream API's HTTP status, when a request was made. */
+  httpStatus?: number;
+}
+
+export interface ToolCallRecord extends ToolCallOutcome {
+  tool: string;
+  caller: Caller;
+  /** Epoch milliseconds. */
+  startedAt: number;
+  durationMs: number;
+}
+
+const SERVICE_NAME = process.env.OTEL_SERVICE_NAME || ${JSON.stringify(serviceName)};
+const EXPORT_TIMEOUT_MS = 2000;
+
+const tracesUrl =
+  process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ||
+  (process.env.OTEL_EXPORTER_OTLP_ENDPOINT ? \`\${process.env.OTEL_EXPORTER_OTLP_ENDPOINT.replace(/\\/$/, "")}/v1/traces\` : undefined);
+
+/** OTEL_EXPORTER_OTLP_HEADERS: "name=value,name2=value2", values URL-encoded. */
+function exportHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const pair of (process.env.OTEL_EXPORTER_OTLP_HEADERS ?? "").split(",")) {
+    const at = pair.indexOf("=");
+    if (at <= 0) continue;
+    const value = pair.slice(at + 1).trim();
+    try {
+      headers[pair.slice(0, at).trim().toLowerCase()] = decodeURIComponent(value);
+    } catch {
+      headers[pair.slice(0, at).trim().toLowerCase()] = value;
+    }
+  }
+  return headers;
+}
+
+type Attribute = { key: string; value: { stringValue: string } | { intValue: string } | { boolValue: boolean } };
+
+function attribute(key: string, value: string | number | boolean | undefined): Attribute[] {
+  if (value === undefined) return [];
+  if (typeof value === "string") return [{ key, value: { stringValue: value } }];
+  if (typeof value === "boolean") return [{ key, value: { boolValue: value } }];
+  return [{ key, value: { intValue: String(Math.round(value)) } }];
+}
+
+/** One tool call as an OTLP/HTTP JSON trace export: a single SERVER span. */
+function toOtlp(call: ToolCallRecord) {
+  return {
+    resourceSpans: [
+      {
+        resource: { attributes: attribute("service.name", SERVICE_NAME) },
+        scopeSpans: [
+          {
+            scope: { name: "altship-mcp" },
+            spans: [
+              {
+                traceId: randomBytes(16).toString("hex"),
+                spanId: randomBytes(8).toString("hex"),
+                name: \`tools/call \${call.tool}\`,
+                kind: 2,
+                startTimeUnixNano: \`\${call.startedAt}000000\`,
+                endTimeUnixNano: \`\${call.startedAt + call.durationMs}000000\`,
+                attributes: [
+                  ...attribute("mcp.method.name", "tools/call"),
+                  ...attribute("gen_ai.tool.name", call.tool),
+                  ...attribute("mcp.caller.kind", call.caller.kind),
+                  ...attribute("enduser.id", call.caller.id),
+                  ...attribute("http.response.status_code", call.httpStatus),
+                  ...attribute("error.type", call.errorType),
+                ],
+                status: { code: call.ok ? 1 : 2 },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+let exportFailureLogged = false;
+
+/**
+ * Records one tool call. Awaited before the call's result is returned, so
+ * the export isn't cut off when a serverless function is frozen; it never
+ * throws and gives up after a short timeout.
+ */
+export async function recordToolCall(call: ToolCallRecord): Promise<void> {
+  console.error(
+    JSON.stringify({
+      event: "tool_call",
+      time: new Date(call.startedAt).toISOString(),
+      tool: call.tool,
+      caller: call.caller,
+      ok: call.ok,
+      errorType: call.errorType,
+      httpStatus: call.httpStatus,
+      durationMs: call.durationMs,
+    }),
+  );
+  if (!tracesUrl) return;
+  try {
+    const res = await fetch(tracesUrl, {
+      method: "POST",
+      headers: { ...exportHeaders(), "content-type": "application/json" },
+      body: JSON.stringify(toOtlp(call)),
+      signal: AbortSignal.timeout(EXPORT_TIMEOUT_MS),
+    });
+    if (!res.ok) throw new Error(\`collector responded \${res.status}\`);
+  } catch (err) {
+    if (!exportFailureLogged) {
+      exportFailureLogged = true;
+      console.error(\`Telemetry export failed (\${err instanceof Error ? err.message : "unknown error"}); further failures aren't logged.\`);
+    }
+  }
+}
+`;
+}
+
+/**
  * Shared by every deployment target (Node stdio/HTTP, Vercel): builds a
  * fresh, unconnected Server per call. There's no per-client session state
  * worth keeping for a stateless API adapter like this one, so "create one
@@ -514,6 +674,8 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { TOOLS } from "./tools.js";
 import { executeTool } from "./client.js";
+import { recordToolCall, type ToolCallOutcome } from "./telemetry.js";
+import type { Caller } from "./access.js";
 
 // ajv-formats ships CJS types with an ESM-shaped \`export default\`, which
 // trips up TS's NodeNext interop (the import resolves to the module
@@ -525,7 +687,8 @@ const ajv = new Ajv({ allErrors: true, strict: false });
 addFormats(ajv);
 const validators = new Map(TOOLS.map((tool) => [tool.name, ajv.compile(tool.inputSchema)]));
 
-export function createMcpServer(): Server {
+/** \`caller\` is who the access check let in (see access.ts); it's recorded with every tool call. */
+export function createMcpServer(caller: Caller = { kind: "local" }): Server {
   const server = new Server(
     { name: ${JSON.stringify(serverName)}, version: "0.1.0" },
     { capabilities: { tools: {} } },
@@ -551,15 +714,23 @@ export function createMcpServer(): Server {
     // the calling end-user's own token in "passthrough" auth mode.
     const callerToken = extra.authInfo?.token;
     const tool = TOOLS.find((t) => t.name === name);
+    const startedAt = Date.now();
+    // Every call is recorded (audit log + telemetry) before its result goes
+    // back: who called which tool, how it went and how long it took. Never the
+    // arguments, the response or any credential.
+    const finish = async (text: string, outcome: ToolCallOutcome) => {
+      await recordToolCall({ tool: String(name).slice(0, 200), caller, startedAt, durationMs: Date.now() - startedAt, ...outcome });
+      return { content: [{ type: "text" as const, text }], isError: !outcome.ok };
+    };
 
     if (!tool) {
-      return { content: [{ type: "text", text: \`Unknown tool: \${name}\` }], isError: true };
+      return finish(\`Unknown tool: \${name}\`, { ok: false, errorType: "unknown_tool" });
     }
 
     const validate = validators.get(name)!;
     if (!validate(args ?? {})) {
       const message = ajv.errorsText(validate.errors, { separator: "; " });
-      return { content: [{ type: "text", text: \`Invalid input: \${message}\` }], isError: true };
+      return finish(\`Invalid input: \${message}\`, { ok: false, errorType: "invalid_input" });
     }
 
     try {
@@ -568,14 +739,11 @@ export function createMcpServer(): Server {
         result.ok && (result.body === null || result.body === undefined)
           ? \`OK (\${result.status})\`
           : JSON.stringify(result.body, null, 2);
-      return {
-        content: [{ type: "text", text }],
-        isError: !result.ok,
-      };
+      return finish(text, { ok: result.ok, httpStatus: result.status, ...(result.ok ? {} : { errorType: "upstream_error" as const }) });
     } catch (err) {
       // Never leak the raw error upstream in case it embeds request internals —
       // surface a stable message instead.
-      return { content: [{ type: "text", text: \`Request failed: \${err instanceof Error ? err.message : "unknown error"}\` }], isError: true };
+      return finish(\`Request failed: \${err instanceof Error ? err.message : "unknown error"}\`, { ok: false, errorType: "request_failed" });
     }
   });
 
@@ -666,7 +834,7 @@ function startHttpServer(port: number): void {
       return;
     }
 
-    const server = createMcpServer();
+    const server = createMcpServer(access.caller);
     try {
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       res.on("close", () => {
@@ -747,7 +915,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  const server = createMcpServer();
+  const server = createMcpServer(access.caller);
   try {
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => {
@@ -905,6 +1073,12 @@ Every request to the MCP endpoint must be authorised. Configure one or both:
 - **OAuth sign-in.** Set \`MCP_OAUTH_ISSUER\` to an OAuth 2.1 / OIDC issuer and \`MCP_OAUTH_ALLOWED_SUBJECTS\` to the user ids allowed in. The server publishes \`/.well-known/oauth-protected-resource\`, so clients such as claude.ai and ChatGPT can send users to sign in and connect without a key.
 
 For local testing only, \`MCP_ALLOW_UNAUTHENTICATED=true\` accepts every caller.
+
+## Audit log and telemetry
+
+Every tool call is written to stderr as one JSON line: the tool, who called it (an access key's hash prefix or a signed-in user's id), whether it worked, the upstream HTTP status and the duration. Arguments, responses and credentials are never recorded.
+
+To send the same calls to an OpenTelemetry collector as spans (OTLP/HTTP JSON), set \`OTEL_EXPORTER_OTLP_ENDPOINT\` (and \`OTEL_EXPORTER_OTLP_HEADERS\` if it needs authentication).
 `;
 }
 
@@ -928,6 +1102,10 @@ export function envExampleTemplate(binding: AuthBinding, baseUrlEnvVar: string, 
     "# MCP_OAUTH_UPSTREAM_KEY=     # per-user credentials: key to decrypt each caller's own credential",
     "# MCP_PUBLIC_URL=             # optional; this server's public origin, used in OAuth metadata",
     "# MCP_ALLOW_UNAUTHENTICATED=true  # accept every caller -- local testing only",
+    "",
+    "# Send tool-call spans to an OpenTelemetry collector (optional; see README > Audit log and telemetry):",
+    "# OTEL_EXPORTER_OTLP_ENDPOINT=   # collector base URL; spans are POSTed to <it>/v1/traces",
+    "# OTEL_EXPORTER_OTLP_HEADERS=    # e.g. authorization=Bearer%20<token>",
   );
   return lines.join("\n") + "\n";
 }
@@ -1014,5 +1192,11 @@ Every request to the MCP endpoint must be authorised. Configure one or both:
 - **OAuth sign-in.** Set \`MCP_OAUTH_ISSUER\` to an OAuth 2.1 / OIDC issuer and \`MCP_OAUTH_ALLOWED_SUBJECTS\` to the user ids allowed in. The server publishes \`/.well-known/oauth-protected-resource\`, so clients such as claude.ai and ChatGPT can send users to sign in and connect without a key.
 
 For local testing only, \`MCP_ALLOW_UNAUTHENTICATED=true\` accepts every caller.
+
+## Audit log and telemetry
+
+Every tool call is written to stderr as one JSON line: the tool, who called it (an access key's hash prefix or a signed-in user's id), whether it worked, the upstream HTTP status and the duration. Arguments, responses and credentials are never recorded.
+
+To send the same calls to an OpenTelemetry collector as spans (OTLP/HTTP JSON), set \`OTEL_EXPORTER_OTLP_ENDPOINT\` (and \`OTEL_EXPORTER_OTLP_HEADERS\` if it needs authentication).
 `;
 }

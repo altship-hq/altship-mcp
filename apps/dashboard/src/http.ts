@@ -40,6 +40,15 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
   return readJson<T>(path, res);
 }
 
+export async function patchJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await apiFetch(path, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return readJson<T>(path, res);
+}
+
 export async function getJson<T>(path: string): Promise<T> {
   return readJson<T>(path, await apiFetch(path));
 }

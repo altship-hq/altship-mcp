@@ -49,6 +49,9 @@ describe("generated server (Streamable HTTP transport)", () => {
   let mockBaseUrl: string;
   let serverProcess: ChildProcess;
   let port: number;
+  // Stands in for an OpenTelemetry collector: keeps what the server exports.
+  let collector: http.Server;
+  const exported: Array<{ authorization: string | undefined; body: any }> = [];
 
   beforeAll(async () => {
     mockServer = http.createServer((req, res) => {
@@ -57,6 +60,17 @@ describe("generated server (Streamable HTTP transport)", () => {
     });
     await new Promise<void>((resolve) => mockServer.listen(0, resolve));
     mockBaseUrl = `http://localhost:${(mockServer.address() as AddressInfo).port}`;
+
+    collector = http.createServer((req, res) => {
+      let raw = "";
+      req.on("data", (chunk) => (raw += chunk));
+      req.on("end", () => {
+        if (req.url === "/v1/traces") exported.push({ authorization: req.headers.authorization, body: JSON.parse(raw) });
+        res.setHeader("content-type", "application/json");
+        res.end("{}");
+      });
+    });
+    await new Promise<void>((resolve) => collector.listen(0, resolve));
 
     projectDir = await mkdtemp(path.join(tmpdir(), "mcp-gen-http-e2e-"));
     const { document } = await validateSpec(fixture("petstore-expanded.yaml"));
@@ -75,6 +89,8 @@ describe("generated server (Streamable HTTP transport)", () => {
         PORT: String(port),
         SWAGGER_PETSTORE_BASE_URL: mockBaseUrl,
         MCP_ACCESS_KEY_SHA256: ACCESS_KEY_SHA256,
+        OTEL_EXPORTER_OTLP_ENDPOINT: `http://localhost:${(collector.address() as AddressInfo).port}`,
+        OTEL_EXPORTER_OTLP_HEADERS: "authorization=Bearer%20collector-token",
       },
       stdio: "ignore",
     });
@@ -85,6 +101,7 @@ describe("generated server (Streamable HTTP transport)", () => {
   afterAll(async () => {
     serverProcess?.kill();
     await new Promise((resolve) => mockServer?.close(resolve));
+    await new Promise((resolve) => collector?.close(resolve));
     if (projectDir) await rm(projectDir, { recursive: true, force: true });
   });
 
@@ -123,5 +140,40 @@ describe("generated server (Streamable HTTP transport)", () => {
     expect((result.content as Array<{ text?: string }>)[0].text).toContain("Rex");
 
     await client.close();
+  });
+
+  it("exports each tool call as an OpenTelemetry span: tool, caller and outcome, but no arguments or key", async () => {
+    exported.length = 0;
+    const client = new Client({ name: "http-e2e-test", version: "0.0.1" });
+    const transport = new StreamableHTTPClientTransport(new URL(`http://localhost:${port}/mcp`), {
+      requestInit: { headers: { authorization: `Bearer ${ACCESS_KEY}` } },
+    });
+    await client.connect(transport);
+    await client.callTool({ name: "pets.list", arguments: { limit: 7 } });
+    await client.callTool({ name: "pets.list", arguments: { limit: "not a number" } });
+    await client.close();
+
+    expect(exported).toHaveLength(2);
+    expect(exported[0].authorization).toBe("Bearer collector-token");
+    const spans = exported.map((e) => e.body.resourceSpans[0].scopeSpans[0].spans[0]);
+    const attrs = (span: any) =>
+      Object.fromEntries(span.attributes.map((a: any) => [a.key, a.value.stringValue ?? a.value.intValue ?? a.value.boolValue]));
+
+    expect(spans[0].name).toBe("tools/call pets.list");
+    expect(spans[0].status.code).toBe(1);
+    expect(attrs(spans[0])).toMatchObject({
+      "gen_ai.tool.name": "pets.list",
+      "mcp.caller.kind": "key",
+      "enduser.id": ACCESS_KEY_SHA256.slice(0, 12),
+      "http.response.status_code": "200",
+    });
+    expect(BigInt(spans[0].endTimeUnixNano) >= BigInt(spans[0].startTimeUnixNano)).toBe(true);
+
+    expect(spans[1].status.code).toBe(2);
+    expect(attrs(spans[1])["error.type"]).toBe("invalid_input");
+
+    const everything = JSON.stringify(exported.map((e) => e.body));
+    expect(everything).not.toContain(ACCESS_KEY);
+    expect(everything).not.toContain("not a number");
   });
 });

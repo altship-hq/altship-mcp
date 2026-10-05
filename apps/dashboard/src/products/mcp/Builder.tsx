@@ -32,6 +32,7 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [apiTitle, setApiTitle] = useState<string | null>(null);
+  const [serverName, setServerName] = useState("");
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
   const [tools, setTools] = useState<ToolDefinition[]>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
@@ -85,6 +86,7 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
     try {
       const result = await importSpec(specSource!);
       setApiTitle(result.apiTitle);
+      setServerName(result.apiTitle ?? "");
       setIssues(result.issues);
       setTools(result.tools);
       setAuthRequirement(result.auth);
@@ -113,6 +115,7 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
 
       if (platform === "vercel") {
         const result = await deployToVercel(specSource!, toolNames, {
+          name: serverName.trim() || undefined,
           authMode: forCustomers ? "static" : authMode,
           credentialValue: forCustomers ? undefined : credentialValue || undefined,
           audience: forCustomers ? "customers" : "private",
@@ -339,6 +342,23 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
               </label>
             </div>
           </div>
+
+          {platform === "vercel" && (
+            <div className="config-section credential-field">
+              <h3>
+                <label htmlFor="server-name">Server name</label>
+              </h3>
+              <p className="hint">What this server is called in your dashboard and in invites. You can change it later.</p>
+              <input
+                id="server-name"
+                type="text"
+                maxLength={80}
+                value={serverName}
+                onChange={(e) => setServerName(e.target.value)}
+                placeholder={apiTitle ?? "My MCP server"}
+              />
+            </div>
+          )}
 
           {platform === "vercel" && (
             <div className="config-section">

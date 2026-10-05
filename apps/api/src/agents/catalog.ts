@@ -30,7 +30,7 @@ export async function loadCatalog(userId: string): Promise<{ servers: CatalogEnt
       if (d.audience === "customers") {
         unavailable.push({
           deploymentId: d.id,
-          title: d.apiTitle,
+          title: d.name,
           reason: "Offered to your customers; each person signs in with their own credential.",
         });
         return;
@@ -38,7 +38,7 @@ export async function loadCatalog(userId: string): Promise<{ servers: CatalogEnt
       if (d.authMode === "passthrough") {
         unavailable.push({
           deploymentId: d.id,
-          title: d.apiTitle,
+          title: d.name,
           reason: "Uses per-user auth; agents can't supply a caller token yet.",
         });
         return;
@@ -48,14 +48,14 @@ export async function loadCatalog(userId: string): Promise<{ servers: CatalogEnt
           deploymentId: d.id,
           projectId: d.projectId,
           name: d.projectName,
-          title: d.apiTitle,
+          title: d.name,
           url: mcpEndpoint(d),
           tools: d.tools?.map(toCatalogTool) ?? (await listLiveTools(d)),
         });
       } catch (err) {
         unavailable.push({
           deploymentId: d.id,
-          title: d.apiTitle,
+          title: d.name,
           reason: `Couldn't list its tools: ${err instanceof Error ? err.message : String(err)}`,
         });
       }

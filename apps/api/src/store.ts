@@ -26,6 +26,9 @@ export interface DeploymentRecord {
   /** Who the server is for: the owner's team ("private") or the owner's own customers. */
   audience: Audience;
   createdAt: string;
+  /** What the owner calls the server; the spec's title until they rename it. */
+  name: string;
+  /** The title from the OpenAPI spec the server was generated from. */
   apiTitle: string;
   toolNames: string[];
   projectName: string;
@@ -43,6 +46,7 @@ interface DeploymentRow {
   user_id: string;
   audience: Audience | null;
   created_at: string;
+  name?: string | null;
   api_title: string;
   tool_names: string[];
   project_name: string;
@@ -59,6 +63,7 @@ function fromRow(row: DeploymentRow): DeploymentRecord {
     userId: row.user_id,
     audience: row.audience ?? "private",
     createdAt: row.created_at,
+    name: row.name || row.api_title,
     apiTitle: row.api_title,
     toolNames: row.tool_names,
     projectName: row.project_name,
@@ -88,6 +93,8 @@ export async function recordDeployment(record: Omit<DeploymentRecord, "createdAt
       id: record.id,
       user_id: record.userId,
       audience: record.audience,
+      // Only stored when it differs from the spec's title, which is the default.
+      ...(record.name !== record.apiTitle ? { name: record.name } : {}),
       api_title: record.apiTitle,
       tool_names: record.toolNames,
       project_name: record.projectName,
@@ -104,6 +111,19 @@ export async function recordDeployment(record: Omit<DeploymentRecord, "createdAt
 export async function getDeployment(id: string, userId: string): Promise<DeploymentRecord | null> {
   const { data, error } = await getSupabase().from("deployments").select("*").eq("id", id).eq("user_id", userId).maybeSingle();
   if (error) throw new Error(`Failed to load deployment: ${error.message}`);
+  return data ? fromRow(data as DeploymentRow) : null;
+}
+
+/** Renames the user's deployment; null goes back to the spec's title. Returns null if it isn't theirs. */
+export async function renameDeployment(id: string, userId: string, name: string | null): Promise<DeploymentRecord | null> {
+  const { data, error } = await getSupabase()
+    .from("deployments")
+    .update({ name })
+    .eq("id", id)
+    .eq("user_id", userId)
+    .select("*")
+    .maybeSingle();
+  if (error) throw new Error(`Failed to rename MCP server: ${error.message}`);
   return data ? fromRow(data as DeploymentRow) : null;
 }
 
@@ -383,4 +403,110 @@ export async function markInviteAccepted(id: string, userId: string): Promise<vo
 export async function deleteAcceptedInvites(deploymentId: string, userId: string): Promise<void> {
   const { error } = await getSupabase().from("deployment_invites").delete().eq("deployment_id", deploymentId).eq("accepted_by", userId);
   if (error) throw new Error(`Failed to remove invite: ${error.message}`);
+}
+
+/** The managed server hosted in that project (for telemetry it exports). */
+export async function getDeploymentByProjectId(projectId: string): Promise<DeploymentRecord | null> {
+  const { data, error } = await getSupabase().from("deployments").select("*").eq("project_id", projectId).limit(1).maybeSingle();
+  if (error) throw new Error(`Failed to load deployment: ${error.message}`);
+  return data ? fromRow(data as DeploymentRow) : null;
+}
+
+/** A recorded tool call on a managed server. */
+export interface ToolCallRecord {
+  id: string;
+  deploymentId: string;
+  startedAt: string;
+  tool: string;
+  ok: boolean;
+  errorType: string | null;
+  httpStatus: number | null;
+  durationMs: number;
+  callerKind: string;
+  callerId: string | null;
+}
+
+interface ToolCallRow {
+  id: string;
+  deployment_id: string;
+  started_at: string;
+  tool: string;
+  ok: boolean;
+  error_type: string | null;
+  http_status: number | null;
+  duration_ms: number;
+  caller_kind: string;
+  caller_id: string | null;
+}
+
+export async function insertToolCalls(
+  deploymentId: string,
+  calls: Array<Omit<ToolCallRecord, "id" | "deploymentId"> & { traceId: string | null; spanId: string | null }>,
+): Promise<void> {
+  if (calls.length === 0) return;
+  const { error } = await getSupabase()
+    .from("tool_calls")
+    .insert(
+      calls.map((c) => ({
+        deployment_id: deploymentId,
+        started_at: c.startedAt,
+        tool: c.tool,
+        ok: c.ok,
+        error_type: c.errorType,
+        http_status: c.httpStatus,
+        duration_ms: c.durationMs,
+        caller_kind: c.callerKind,
+        caller_id: c.callerId,
+        trace_id: c.traceId,
+        span_id: c.spanId,
+      })),
+    );
+  if (error) throw new Error(`Failed to record tool calls: ${error.message}`);
+}
+
+/** The most recent calls on those deployments, newest first; `before` pages further back. */
+export async function listToolCalls(deploymentIds: string[], options: { limit: number; before?: string }): Promise<ToolCallRecord[]> {
+  if (deploymentIds.length === 0) return [];
+  let query = getSupabase()
+    .from("tool_calls")
+    .select("id,deployment_id,started_at,tool,ok,error_type,http_status,duration_ms,caller_kind,caller_id")
+    .in("deployment_id", deploymentIds)
+    .order("started_at", { ascending: false })
+    .limit(options.limit);
+  if (options.before) query = query.lt("started_at", options.before);
+  const { data, error } = await query;
+  if (error) throw new Error(`Failed to list tool calls: ${error.message}`);
+  return (data as ToolCallRow[]).map((row) => ({
+    id: row.id,
+    deploymentId: row.deployment_id,
+    startedAt: row.started_at,
+    tool: row.tool,
+    ok: row.ok,
+    errorType: row.error_type,
+    httpStatus: row.http_status,
+    durationMs: row.duration_ms,
+    callerKind: row.caller_kind,
+    callerId: row.caller_id,
+  }));
+}
+
+/** Every key a deployment has had, revoked ones included, to name the callers in its logs. */
+export async function listKeyHashes(deploymentIds: string[]): Promise<Array<{ deploymentId: string; name: string; keyHash: string; revoked: boolean }>> {
+  if (deploymentIds.length === 0) return [];
+  const { data, error } = await getSupabase().from("server_keys").select("deployment_id,name,key_hash,revoked_at").in("deployment_id", deploymentIds);
+  if (error) throw new Error(`Failed to load access keys: ${error.message}`);
+  return (data as Array<{ deployment_id: string; name: string; key_hash: string; revoked_at: string | null }>).map((r) => ({
+    deploymentId: r.deployment_id,
+    name: r.name,
+    keyHash: r.key_hash,
+    revoked: r.revoked_at !== null,
+  }));
+}
+
+/** The members of several deployments at once, to name the callers in their logs. */
+export async function listMembersOf(deploymentIds: string[]): Promise<Array<{ deploymentId: string; userId: string; email: string }>> {
+  if (deploymentIds.length === 0) return [];
+  const { data, error } = await getSupabase().from("deployment_members").select("deployment_id,user_id,email").in("deployment_id", deploymentIds);
+  if (error) throw new Error(`Failed to load people: ${error.message}`);
+  return (data as MemberRow[]).map((r) => ({ deploymentId: r.deployment_id, userId: r.user_id, email: r.email }));
 }

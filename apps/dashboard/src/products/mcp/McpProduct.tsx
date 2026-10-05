@@ -56,7 +56,12 @@ export default function McpProduct({ subpath }: { subpath: string }) {
     <>
       {loadError && <div className="notice">Couldn't load your MCP servers: {loadError}</div>}
       {serverId ? (
-        <ServerPage deploymentId={serverId} deployments={deployments} loading={loading} />
+        <ServerPage
+          deploymentId={serverId}
+          deployments={deployments}
+          loading={loading}
+          onRenamed={(renamed) => setDeployments((current) => current.map((d) => (d.id === renamed.id ? { ...d, name: renamed.name } : d)))}
+        />
       ) : subpath === "servers" ? (
         <>
           <PageHead title="MCP servers" description="Servers you've deployed to a managed endpoint." action={newServerButton} />
@@ -145,7 +150,7 @@ function ServerTable({ deployments, loading }: { deployments: DeploymentRecord[]
             <tr key={d.id}>
               <td className="server-name">
                 <Link to={`mcp/servers/${d.id}`}>
-                  <strong>{d.apiTitle}</strong>
+                  <strong>{d.name}</strong>
                 </Link>
                 <small>{d.projectName}</small>
               </td>

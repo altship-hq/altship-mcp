@@ -13,6 +13,7 @@ import {
   recordDeployment,
   listDeployments,
   getDeployment,
+  renameDeployment,
   insertServerKey,
   listServerKeys,
   activeKeyHashes,
@@ -28,14 +29,22 @@ import {
   cancelInvite,
   markInviteAccepted,
   deleteAcceptedInvites,
+  getDeploymentByProjectId,
+  insertToolCalls,
+  listToolCalls,
+  listKeyHashes,
+  listMembersOf,
+  type ToolCallRecord,
   type ConnectSettings,
   type DeploymentRecord,
   type InviteRecord,
 } from "./store.js";
-import { AccessKeyConfigError, displayPrefix, generateAccessKey, hashAccessKey } from "./access-keys.js";
+import { AccessKeyConfigError, displayPrefix, generateAccessKey, hashAccessKey, internalAccessKey } from "./access-keys.js";
 import { AudienceError, applyAccessEnv, parseAudience } from "./server-access.js";
 import { confirmedEmailOf, requireAuth, userIdOf } from "./auth.js";
 import { inviteLink, sendInviteEmail } from "./email.js";
+import { parseToolCallSpans, projectIdFromToken, telemetryEnv } from "./telemetry.js";
+import { getSupabase } from "./supabase.js";
 import { agentsRouter, agentsErrorHandler } from "./agents/router.js";
 import { endUsersRouter } from "./end-users/router.js";
 import { listConnections, revokeConnection } from "./end-users/store.js";
@@ -70,10 +79,23 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+// Telemetry from managed MCP servers: an OTLP/HTTP (JSON) trace receiver.
+// Each server authenticates with the token derived for its hosting project
+// (see telemetry.ts), so a server can only ever add calls to its own log.
+app.post("/api/otel/v1/traces", async (req, res) => {
+  const token = req.header("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
+  const projectId = token ? projectIdFromToken(token) : null;
+  const deployment = projectId ? await getDeploymentByProjectId(projectId) : null;
+  if (!deployment) return res.status(401).json({ error: "Unknown telemetry token." });
+  await insertToolCalls(deployment.id, parseToolCallSpans(req.body));
+  // OTLP's success response: an empty ExportTraceServiceResponse.
+  res.json({});
+});
+
 app.use("/api/agents", agentsRouter, agentsErrorHandler);
 
 // Everything else is the MCP Creator dashboard API: signed-in users only.
-app.use(["/api/tools", "/api/generate", "/api/deployments", "/api/deploy", "/api/invites"], requireAuth);
+app.use(["/api/tools", "/api/generate", "/api/deployments", "/api/deploy", "/api/invites", "/api/logs"], requireAuth);
 
 app.post("/api/tools", async (req, res) => {
   const spec = specInput(req.body);
@@ -165,6 +187,7 @@ app.post("/api/deploy", async (req, res) => {
   }
 
   const apiTitle = validation.document.info?.title ?? "Generated API";
+  const name = serverName(req.body?.name) ?? apiTitle;
   const apiEnvSlug = envSlug(apiTitle) || "API";
   const forCustomers = audience === "customers";
   // For customers, each end user brings their own credential, so the shared
@@ -218,6 +241,11 @@ app.post("/api/deploy", async (req, res) => {
       keyHashes: accessKey ? [hashAccessKey(accessKey)] : [],
     });
 
+    // Where the server sends its tool-call telemetry (shown under Logs).
+    for (const [key, value] of Object.entries(telemetryEnv(project.id))) {
+      await setProjectEnvVar(project.id, key, value);
+    }
+
     // Best-effort: gives the deployment a "<slug>.mcp.altship.io" URL
     // instead of a random *.vercel.app one. deployFiles() falls back
     // gracefully if this doesn't succeed (e.g. DNS not propagated yet).
@@ -229,6 +257,7 @@ app.post("/api/deploy", async (req, res) => {
       id: deployment.id,
       userId: userIdOf(req),
       audience,
+      name,
       apiTitle,
       toolNames: tools.map((t) => t.name),
       projectName: project.name,
@@ -272,6 +301,14 @@ app.post("/api/deploy", async (req, res) => {
   } finally {
     await rm(outDir, { recursive: true, force: true });
   }
+});
+
+// Renames a server. An empty name goes back to the spec's title.
+app.patch("/api/deployments/:id", async (req, res) => {
+  if (typeof req.body?.name !== "string") return res.status(400).json({ error: "name must be a string." });
+  const deployment = await renameDeployment(String(req.params.id), userIdOf(req), serverName(req.body.name));
+  if (!deployment) return res.status(404).json({ error: "MCP server not found." });
+  res.json(deployment);
 });
 
 // ---- Access keys ----------------------------------------------------------
@@ -331,6 +368,98 @@ app.delete("/api/deployments/:id/connections/:connectionId", async (req, res) =>
   res.json({ ok: true });
 });
 
+// ---- Logs (tool calls on the user's servers) ------------------------------
+
+const MAX_LOG_PAGE = 200;
+
+// The most recent tool calls, newest first, on one server (?deploymentId=) or
+// all of the user's. `before` (a call's time) pages further back.
+app.get("/api/logs", async (req, res) => {
+  const deploymentId = typeof req.query.deploymentId === "string" ? req.query.deploymentId : null;
+  let deployments: DeploymentRecord[];
+  if (deploymentId) {
+    const deployment = await getDeployment(deploymentId, userIdOf(req));
+    if (!deployment) return res.status(404).json({ error: "MCP server not found." });
+    deployments = [deployment];
+  } else {
+    deployments = await listDeployments(userIdOf(req));
+  }
+
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), MAX_LOG_PAGE);
+  const before = typeof req.query.before === "string" && !Number.isNaN(Date.parse(req.query.before)) ? req.query.before : undefined;
+  // One extra row tells us whether there's another page.
+  const rows = await listToolCalls(deployments.map((d) => d.id), { limit: limit + 1, before });
+  const calls = rows.slice(0, limit);
+  const callerLabel = await callerLabeller(deployments, calls, confirmedEmailOf(req));
+  const byId = new Map(deployments.map((d) => [d.id, d]));
+
+  res.json({
+    calls: calls.map((call) => ({
+      id: call.id,
+      deploymentId: call.deploymentId,
+      serverName: byId.get(call.deploymentId)?.name ?? "",
+      startedAt: call.startedAt,
+      tool: call.tool,
+      ok: call.ok,
+      errorType: call.errorType,
+      httpStatus: call.httpStatus,
+      durationMs: call.durationMs,
+      caller: { kind: call.callerKind, id: call.callerId, label: callerLabel(call) },
+    })),
+    nextBefore: rows.length > limit ? calls[calls.length - 1].startedAt : null,
+  });
+});
+
+/**
+ * Names the caller of each call for the owner: which access key (by the hash
+ * prefix the server recorded), which altship user, or which end-user connection.
+ */
+async function callerLabeller(deployments: DeploymentRecord[], calls: ToolCallRecord[], ownerEmail: string | null) {
+  const ids = deployments.map((d) => d.id);
+  const endUserIds = [...new Set(calls.filter((c) => c.callerKind === "end-user" && c.callerId).map((c) => c.callerId!))];
+  const [keys, members, connections] = await Promise.all([
+    listKeyHashes(ids),
+    listMembersOf(ids),
+    endUserIds.length
+      ? getSupabase().from("end_user_connections").select("id,credential_hint").in("id", endUserIds)
+      : Promise.resolve({ data: [] as Array<{ id: string; credential_hint: string }>, error: null }),
+  ]);
+  if (connections.error) throw new Error(`Failed to load connections: ${connections.error.message}`);
+  const hints = new Map((connections.data ?? []).map((c) => [c.id, c.credential_hint]));
+  const internalHashes = new Map<string, string>();
+  for (const d of deployments) {
+    try {
+      internalHashes.set(d.id, hashAccessKey(internalAccessKey(d.projectId)));
+    } catch {
+      // No internal key configured: Agent Creator's calls show as an unknown key.
+    }
+  }
+  const owners = new Map(deployments.map((d) => [d.id, d.userId]));
+
+  return (call: ToolCallRecord): string => {
+    const id = call.callerId;
+    switch (call.callerKind) {
+      case "key": {
+        if (!id) return "Access key";
+        const key = keys.find((k) => k.deploymentId === call.deploymentId && k.keyHash.startsWith(id));
+        if (key) return `Access key "${key.name}"${key.revoked ? " (revoked)" : ""}`;
+        return internalHashes.get(call.deploymentId)?.startsWith(id) ? "altship Agent Creator" : "Unknown access key";
+      }
+      case "user": {
+        if (id && id === owners.get(call.deploymentId)) return ownerEmail ? `${ownerEmail} (you)` : "You";
+        const member = members.find((m) => m.deploymentId === call.deploymentId && m.userId === id);
+        return member ? member.email : "Removed user";
+      }
+      case "end-user":
+        return id && hints.has(id) ? `End user ${hints.get(id)}` : "End user";
+      case "local":
+        return "Local (stdio)";
+      default:
+        return "Unauthenticated";
+    }
+  };
+}
+
 // ---- People (other altship users who may sign in to a private server) ----
 // The owner invites an email address; whoever signs in with that address and
 // opens the invite link becomes a member.
@@ -374,7 +503,7 @@ app.post("/api/deployments/:id/invites", async (req, res) => {
   const { invite, created } = await createInvite({ id: newInviteId(), deploymentId: deployment.id, email });
   // An invite that was already pending isn't emailed again.
   const emailed = created
-    ? await sendInviteEmail({ to: email, inviterEmail: ownerEmail, serverName: deployment.apiTitle, link: inviteLink(invite.id) })
+    ? await sendInviteEmail({ to: email, inviterEmail: ownerEmail, serverName: deployment.name, link: inviteLink(invite.id) })
     : false;
   res.status(201).json({ ...inviteView(invite), emailed });
 });
@@ -422,7 +551,7 @@ app.post("/api/invites/:id/accept", async (req, res) => {
     await syncAccessKeys(deployment);
     await markInviteAccepted(invite.id, userId);
   }
-  res.json({ apiTitle: deployment.apiTitle, mcpUrl: mcpEndpoint(deployment.url), toolCount: deployment.toolNames.length });
+  res.json({ name: deployment.name, mcpUrl: mcpEndpoint(deployment.url), toolCount: deployment.toolNames.length });
 });
 
 function inviteView(invite: InviteRecord) {
@@ -443,6 +572,14 @@ async function syncAccessKeys(deployment: DeploymentRecord) {
     keyHashes: await activeKeyHashes(deployment.id),
   });
   await redeploy({ id: deployment.projectId, name: deployment.projectName }, deployment.id);
+}
+
+const MAX_SERVER_NAME = 80;
+
+/** A server name as the owner typed it: one line, trimmed, capped. Null when there's nothing left. */
+function serverName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  return value.replace(/\s+/g, " ").trim().slice(0, MAX_SERVER_NAME) || null;
 }
 
 function newKeyId(): string {

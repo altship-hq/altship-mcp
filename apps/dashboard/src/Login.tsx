@@ -414,7 +414,7 @@ export function InviteAccept({ inviteId, email }: { inviteId: string; email: str
   }
 
   return (
-    <LoginCard title={`You can now use ${server.apiTitle}`} copy={`You have access to this MCP server and its ${server.toolCount} tools${email ? ` as ${email}` : ""}.`}>
+    <LoginCard title={`You can now use ${server.name}`} copy={`You have access to this MCP server and its ${server.toolCount} tools${email ? ` as ${email}` : ""}.`}>
       <div className="login-form">
         <label>
           MCP server URL

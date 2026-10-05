@@ -1,4 +1,4 @@
-import { deleteJson, getJson, postJson } from "../../http.js";
+import { deleteJson, getJson, patchJson, postJson } from "../../http.js";
 
 export interface ValidationIssue {
   severity: "error" | "warning";
@@ -45,6 +45,9 @@ export interface GenerateResponse {
 export interface DeploymentRecord {
   id: string;
   createdAt: string;
+  /** What the owner calls the server; the spec's title until they rename it. */
+  name: string;
+  /** The title from the OpenAPI spec. */
   apiTitle: string;
   toolNames: string[];
   projectName: string;
@@ -112,13 +115,18 @@ export function generateServer(
 export function deployToVercel(
   source: SpecSource,
   toolNames: string[],
-  options: { authMode?: AuthMode; credentialValue?: string; audience?: Audience; connectHelpText?: string } = {},
+  options: { name?: string; authMode?: AuthMode; credentialValue?: string; audience?: Audience; connectHelpText?: string } = {},
 ): Promise<DeployResponse> {
   return postJson<DeployResponse>("/api/deploy", { ...specBody(source), toolNames, ...options });
 }
 
 export function listDeployments(): Promise<DeploymentRecord[]> {
   return getJson<DeploymentRecord[]>("/api/deployments");
+}
+
+/** Renames a server; an empty name goes back to the spec's title. */
+export function renameDeployment(deploymentId: string, name: string): Promise<DeploymentRecord> {
+  return patchJson<DeploymentRecord>(`/api/deployments/${deploymentId}`, { name });
 }
 
 /** Generated managed servers serve MCP at /api/mcp. */
@@ -180,7 +188,7 @@ export function removeMember(deploymentId: string, userId: string): Promise<{ ok
 
 /** The server an accepted invite gives access to. */
 export interface AcceptedInvite {
-  apiTitle: string;
+  name: string;
   mcpUrl: string;
   toolCount: number;
 }
