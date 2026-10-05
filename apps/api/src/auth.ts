@@ -9,6 +9,8 @@ declare global {
   namespace Express {
     interface Request {
       userId?: string;
+      /** Lowercased, and only set once the address is confirmed. */
+      userEmail?: string;
     }
   }
 }
@@ -27,6 +29,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   }
 
   req.userId = data.user.id;
+  if (data.user.email && data.user.email_confirmed_at) req.userEmail = data.user.email.toLowerCase();
   next();
 }
 
@@ -34,4 +37,9 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 export function userIdOf(req: Request): string {
   if (!req.userId) throw new Error("userIdOf() called on a route without requireAuth.");
   return req.userId;
+}
+
+/** The signed-in user's email address, if they've confirmed it. Only valid on routes behind requireAuth. */
+export function confirmedEmailOf(req: Request): string | null {
+  return req.userEmail ?? null;
 }

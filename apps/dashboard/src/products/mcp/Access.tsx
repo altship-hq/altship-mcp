@@ -1,14 +1,20 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
+  cancelInvite,
   createAccessKey,
+  inviteMember,
   listAccessKeys,
   listConnections,
+  listMembers,
   mcpUrl,
+  removeMember,
   revokeAccessKey,
   revokeConnection,
   type AccessKey,
   type DeploymentRecord,
   type EndUserConnection,
+  type Invite,
+  type Member,
 } from "./api.js";
 import { Link } from "../../router.js";
 import { PageHead } from "../../ui.js";
@@ -94,7 +100,7 @@ export function ConnectPanel({ deployment, accessKey }: { deployment: Deployment
           <h3>From claude.ai, ChatGPT and other chat apps</h3>
           <p>
             Add <code>{endpoint}</code> as a custom connector. The app sends you to altship to sign in and approve it; no key
-            needed. Only you (the server's owner) can connect this way for now.
+            needed. You and anyone you invite under People can connect this way.
           </p>
         </>
       )}
@@ -208,7 +214,175 @@ function Connections({ deployment }: { deployment: DeploymentRecord }) {
   );
 }
 
-/** /mcp/servers/<id>: one server's endpoint and access keys. */
+/** For private servers: other altship users who may sign in, with invite, cancel and remove. */
+function People({ deployment }: { deployment: DeploymentRecord }) {
+  const [members, setMembers] = useState<Member[] | null>(null);
+  const [invites, setInvites] = useState<Invite[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [changed, setChanged] = useState(false);
+  const [sent, setSent] = useState<(Invite & { emailed: boolean }) | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  useEffect(() => {
+    listMembers(deployment.id)
+      .then((people) => {
+        setMembers(people.members);
+        setInvites(people.invites);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+  }, [deployment.id]);
+
+  async function invite(e: FormEvent) {
+    e.preventDefault();
+    if (!email.trim()) return;
+    setBusy(true);
+    setError(null);
+    setSent(null);
+    try {
+      const created = await inviteMember(deployment.id, email.trim());
+      setInvites((current) => [...current.filter((i) => i.id !== created.id), created]);
+      setSent(created);
+      setEmail("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+    setBusy(false);
+  }
+
+  async function cancel(pending: Invite) {
+    if (!window.confirm(`Cancel the invite for ${pending.email}? Their link will stop working.`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await cancelInvite(deployment.id, pending.id);
+      setInvites((current) => current.filter((i) => i.id !== pending.id));
+      if (sent?.id === pending.id) setSent(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+    setBusy(false);
+  }
+
+  async function remove(member: Member) {
+    if (!window.confirm(`Remove ${member.email}? They'll lose access within about a minute.`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await removeMember(deployment.id, member.userId);
+      setMembers((current) => (current ?? []).filter((m) => m.userId !== member.userId));
+      setChanged(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+    setBusy(false);
+  }
+
+  async function copyLink(pending: Invite) {
+    await navigator.clipboard.writeText(pending.link);
+    setCopied(pending.id);
+    setTimeout(() => setCopied(null), 1500);
+  }
+
+  const date = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+
+  return (
+    <section className="dash-section">
+      <div className="section-row">
+        <h2>People</h2>
+      </div>
+      <p className="section-copy">
+        Invite someone by email so they can connect from claude.ai, ChatGPT and other chat apps by signing in as themselves. They
+        accept with an altship account for that address, creating one if they need to. They use this server's API credential,
+        and they don't see the server in their own dashboard.
+      </p>
+      {error && <div className="notice">{error}</div>}
+      {changed && <p className="section-copy">Updating the server with your changes…</p>}
+      {sent &&
+        (sent.emailed ? (
+          <p className="section-copy">Invite emailed to {sent.email}.</p>
+        ) : (
+          <div className="key-notice">
+            <strong>Send {sent.email} this link.</strong> We couldn't email it for you.
+            <CopyField label="Invite link" value={sent.link} />
+          </div>
+        ))}
+
+      {members === null ? (
+        <div className="empty">Loading…</div>
+      ) : members.length === 0 && invites.length === 0 ? (
+        <div className="empty">
+          <p>Nobody else yet. Only you can sign in to this server.</p>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table className="servers">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Status</th>
+                <th>Added</th>
+                <th>
+                  <span className="visually-hidden">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {members.map((m) => (
+                <tr key={m.userId}>
+                  <td>
+                    <strong>{m.email}</strong>
+                  </td>
+                  <td>Active</td>
+                  <td className="date">{date(m.createdAt)}</td>
+                  <td className="row-action">
+                    <button type="button" className="link-danger" disabled={busy} onClick={() => remove(m)}>
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {invites.map((i) => (
+                <tr key={i.id}>
+                  <td>
+                    <strong>{i.email}</strong>
+                  </td>
+                  <td>Invited</td>
+                  <td className="date">{date(i.createdAt)}</td>
+                  <td className="row-action">
+                    <button type="button" className="copy-button" onClick={() => copyLink(i)}>
+                      {copied === i.id ? "Copied" : "Copy link"}
+                    </button>{" "}
+                    <button type="button" className="link-danger" disabled={busy} onClick={() => cancel(i)}>
+                      Cancel
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <form className="key-form" onSubmit={invite}>
+        <input
+          type="email"
+          placeholder="Their email, e.g. sam@example.com"
+          value={email}
+          maxLength={254}
+          onChange={(e) => setEmail(e.target.value)}
+          disabled={busy}
+        />
+        <button type="submit" className="btn" disabled={busy}>
+          {busy ? "Working…" : "Invite"}
+        </button>
+      </form>
+    </section>
+  );
+}
+
+/** /mcp/servers/<id>: one server's endpoint, people and access keys. */
 export function ServerPage({ deploymentId, deployments, loading }: { deploymentId: string; deployments: DeploymentRecord[]; loading: boolean }) {
   const deployment = deployments.find((d) => d.id === deploymentId);
   const [keys, setKeys] = useState<AccessKey[] | null>(null);
@@ -296,7 +470,11 @@ export function ServerPage({ deploymentId, deployments, loading }: { deploymentI
         <h2>Who it's for</h2>
         <div className="audience-row">
           <strong>Private</strong>
-          <span>You and your team, through access keys or by signing in with your altship account.</span>
+          <span>
+            {deployment.authMode === "passthrough"
+              ? "You and anyone holding an access key."
+              : "You, people you invite, and anyone holding an access key."}
+          </span>
         </div>
       </section>
 
@@ -304,6 +482,8 @@ export function ServerPage({ deploymentId, deployments, loading }: { deploymentI
         <h2>Connect</h2>
         <ConnectPanel deployment={deployment} />
       </section>
+
+      {deployment.authMode !== "passthrough" && <People deployment={deployment} />}
 
       <section className="dash-section">
         <div className="section-row">

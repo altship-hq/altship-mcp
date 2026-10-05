@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "../../router.js";
 import { PageHead } from "../../ui.js";
-import { flowLabel, listAgents, type AgentRecord } from "./api.js";
+import { flowLabel, listAgents, type AgentRecord, toolCountOf } from "./api.js";
 import NewAgent from "./NewAgent.js";
 import AgentDetail from "./AgentDetail.js";
 
@@ -74,7 +74,7 @@ function Overview() {
                     <span className="row-sub">{a.description}</span>
                   </td>
                   <td>{flowLabel(a)}</td>
-                  <td>{a.plan.agents.reduce((n, ag) => n + ag.tools.length, 0)}</td>
+                  <td>{a.plan.agents.reduce((n, ag) => n + toolCountOf(ag), 0)}</td>
                   <td className="date">{new Date(a.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</td>
                 </tr>
               ))}

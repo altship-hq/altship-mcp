@@ -1,4 +1,4 @@
-import { AGENT_MODELS } from "./types.js";
+import { AGENT_MODELS, BUILTIN_TOOLS } from "./types.js";
 
 // JSON Schema for AgentPlan, in the subset structured outputs accept
 // (every object closed with additionalProperties: false, every field required).
@@ -19,7 +19,7 @@ export const AGENT_PLAN_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["key", "name", "role", "model", "description", "instructions", "tools"],
+        required: ["key", "name", "role", "model", "description", "instructions", "tools", "builtinTools"],
         properties: {
           key: str,
           name: str,
@@ -36,6 +36,19 @@ export const AGENT_PLAN_SCHEMA = {
               properties: {
                 server: str,
                 tool: str,
+                permission: { type: "string", enum: ["auto", "ask"] },
+                reason: str,
+              },
+            },
+          },
+          builtinTools: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["tool", "permission", "reason"],
+              properties: {
+                tool: { type: "string", enum: [...BUILTIN_TOOLS] },
                 permission: { type: "string", enum: ["auto", "ask"] },
                 reason: str,
               },

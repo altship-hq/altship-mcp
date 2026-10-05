@@ -1,5 +1,5 @@
 import { PlaygroundSession } from "@altship/playground";
-import type { CatalogServer, CatalogTool, ToolCatalog } from "@altship/agent-design";
+import type { AgentPlan, CatalogServer, CatalogTool, ToolCatalog } from "@altship/agent-design";
 import { listDeployments, type DeploymentRecord } from "../store.js";
 import { internalAccessKey } from "../access-keys.js";
 
@@ -64,6 +64,12 @@ export async function loadCatalog(userId: string): Promise<{ servers: CatalogEnt
 
   servers.sort((a, b) => a.title.localeCompare(b.title));
   return { servers, unavailable };
+}
+
+/** The catalog servers whose tools a plan actually uses (an agent may use none). */
+export function serversUsedBy(plan: AgentPlan, servers: CatalogEntry[]): CatalogEntry[] {
+  const names = new Set(plan.agents.flatMap((a) => a.tools.map((t) => t.server)));
+  return servers.filter((s) => names.has(s.name));
 }
 
 export function toToolCatalog(servers: CatalogEntry[]): ToolCatalog {

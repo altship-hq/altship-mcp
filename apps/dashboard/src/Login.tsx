@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { sendPasswordReset, signIn, signInWithPassword, signUp, supabase, updatePassword, type Provider } from "./auth.js";
+import { sendPasswordReset, signIn, signInWithPassword, signOut, signUp, supabase, updatePassword, type Provider } from "./auth.js";
+import { acceptInvite, type AcceptedInvite } from "./products/mcp/api.js";
 import { navigate } from "./router.js";
 import logoMark from "./assets/logo-mark.png";
 
@@ -99,7 +100,12 @@ export default function Login() {
     setPending(null);
   }
 
-  const { title, copy } = TITLES[mode];
+  const { title } = TITLES[mode];
+  // Arriving from an invite link (/invite/<id>): say what signing in is for.
+  const copy =
+    mode !== "forgot" && nextPath().startsWith("/invite/")
+      ? "Sign in or create an account to accept your invite. Use the email address the invite was sent to."
+      : TITLES[mode].copy;
   const busy = pending !== null;
 
   return (
@@ -357,6 +363,72 @@ export function OAuthConsent() {
           Allow
         </button>
       </div>
+    </LoginCard>
+  );
+}
+
+type InviteState = { status: "loading" } | { status: "error"; message: string } | { status: "accepted"; server: AcceptedInvite };
+
+/**
+ * /invite/<id>: where someone invited to a private MCP server lands, once
+ * signed in. Accepts the invite for them and shows how to connect.
+ */
+export function InviteAccept({ inviteId, email }: { inviteId: string; email: string | undefined }) {
+  const [state, setState] = useState<InviteState>({ status: "loading" });
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    acceptInvite(inviteId)
+      .then((server) => setState({ status: "accepted", server }))
+      .catch((err) => setState({ status: "error", message: err instanceof Error ? err.message : String(err) }));
+  }, [inviteId]);
+
+  if (state.status === "loading") {
+    return (
+      <LoginCard title="Accepting your invite…" copy="This takes a moment.">
+        {null}
+      </LoginCard>
+    );
+  }
+
+  if (state.status === "error") {
+    return (
+      <LoginCard title="Couldn't accept this invite" copy={email ? `You're signed in as ${email}.` : "Something went wrong with this invite."}>
+        <p className="login-error" role="alert">
+          {state.message}
+        </p>
+        {/* Signing out sends them to /login and back to this link afterwards. */}
+        <button type="button" className="login-provider" onClick={() => signOut()}>
+          Sign in with a different account
+        </button>
+      </LoginCard>
+    );
+  }
+
+  const { server } = state;
+
+  async function copy() {
+    await navigator.clipboard.writeText(server.mcpUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  return (
+    <LoginCard title={`You can now use ${server.apiTitle}`} copy={`You have access to this MCP server and its ${server.toolCount} tools${email ? ` as ${email}` : ""}.`}>
+      <div className="login-form">
+        <label>
+          MCP server URL
+          <input type="text" readOnly value={server.mcpUrl} onFocus={(e) => e.currentTarget.select()} />
+        </label>
+        <button type="button" className="login-submit" onClick={copy}>
+          {copied ? "Copied" : "Copy URL"}
+        </button>
+      </div>
+      <ul className="consent-list">
+        <li>In claude.ai, ChatGPT or another MCP client, add a custom connector with this URL.</li>
+        <li>When it sends you to altship, sign in with this account and click Allow.</li>
+      </ul>
+      <p className="login-hint">Access can take about a minute to start working while the server updates.</p>
     </LoginCard>
   );
 }

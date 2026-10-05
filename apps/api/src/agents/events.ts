@@ -29,6 +29,9 @@ export type AgentUiEvent =
 
 type AnyEvent = BetaManagedAgentsSessionEvent | BetaManagedAgentsStreamSessionEvents;
 
+/** What tool_call events from built-in tools show as their "server". */
+export const BUILTIN_SERVER = "built-in";
+
 function textOf(content: ReadonlyArray<{ type: string; text?: string }> | undefined): string {
   return (content ?? []).flatMap((b) => (b.type === "text" && b.text ? [b.text] : [])).join("\n");
 }
@@ -57,6 +60,27 @@ export function toUiEvent(event: AnyEvent): AgentUiEvent | null {
         kind: "tool_result",
         id: event.id,
         toolCallId: event.mcp_tool_use_id,
+        text: textOf(event.content),
+        isError: event.is_error === true,
+        at,
+      };
+    // Built-in tools (web, sandbox), which need no MCP server.
+    case "agent.tool_use":
+      return {
+        kind: "tool_call",
+        id: event.id,
+        server: BUILTIN_SERVER,
+        tool: event.name,
+        input: event.input,
+        permission: event.evaluated_permission ?? "allow",
+        threadId: event.session_thread_id ?? null,
+        at,
+      };
+    case "agent.tool_result":
+      return {
+        kind: "tool_result",
+        id: event.id,
+        toolCallId: event.tool_use_id,
         text: textOf(event.content),
         isError: event.is_error === true,
         at,

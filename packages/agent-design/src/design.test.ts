@@ -133,3 +133,67 @@ describe("toManagedAgentParams", () => {
     });
   });
 });
+
+describe("built-in tools (no MCP server needed)", () => {
+  const webAgent = agent({
+    builtinTools: [
+      { tool: "web_search", permission: "auto", reason: "find sources" },
+      { tool: "web_fetch", permission: "auto", reason: "read them" },
+      { tool: "bash", permission: "auto", reason: "crunch numbers" },
+      { tool: "web_search", permission: "ask", reason: "duplicate" },
+    ],
+  });
+
+  it("keeps only the built-in tools the user enabled, reporting the rest as gaps", () => {
+    const validated = validatePlan(plan([webAgent]), [], { allowedBuiltins: ["web_search", "web_fetch"] });
+    expect(validated.agents[0].builtinTools.map((t) => t.tool)).toEqual(["web_search", "web_fetch"]);
+    expect(validated.gaps).toContainEqual(expect.objectContaining({ capability: "Run commands" }));
+  });
+
+  it("accepts an agent with no MCP servers and no tools at all", () => {
+    const validated = validatePlan(plan([agent()]), []);
+    expect(validated.agents[0].tools).toEqual([]);
+    expect(validated.agents[0].builtinTools).toEqual([]);
+    const { primary } = toManagedAgentParams(validated, []);
+    expect(primary.params.mcp_servers).toEqual([]);
+    expect(primary.params.tools).toEqual([]);
+  });
+
+  it("loads plans saved before built-in tools existed", () => {
+    const old = plan([agent({ tools: [{ server: "petstore", tool: "user.get", permission: "auto", reason: "" }] })]);
+    delete (old.agents[0] as Record<string, unknown>).builtinTools;
+    expect(validatePlan(old, catalog).agents[0].builtinTools).toEqual([]);
+  });
+
+  it("emits one allowlisted agent toolset and no MCP servers for a web-only agent", () => {
+    const validated = validatePlan(plan([webAgent]), [], { allowedBuiltins: ["web_search", "web_fetch", "bash"] });
+    validated.agents[0].builtinTools[2].permission = "ask";
+    const { primary } = toManagedAgentParams(validated, []);
+    expect(primary.params.mcp_servers).toEqual([]);
+    expect(primary.params.tools).toEqual([
+      {
+        type: "agent_toolset_20260401",
+        default_config: { enabled: false },
+        configs: [
+          { name: "web_search", enabled: true, permission_policy: { type: "always_allow" } },
+          { name: "web_fetch", enabled: true, permission_policy: { type: "always_allow" } },
+          { name: "bash", enabled: true, permission_policy: { type: "always_ask" } },
+        ],
+      },
+    ]);
+  });
+
+  it("combines built-in tools with MCP tools", () => {
+    const validated = validatePlan(
+      plan([agent({
+        tools: [{ server: "petstore", tool: "user.get", permission: "auto", reason: "" }],
+        builtinTools: [{ tool: "web_search", permission: "auto", reason: "" }],
+      })]),
+      catalog,
+      { allowedBuiltins: ["web_search"] },
+    );
+    const types = toManagedAgentParams(validated, catalog).primary.params.tools.map((t) => t.type);
+    expect(types).toEqual(["agent_toolset_20260401", "mcp_toolset"]);
+  });
+});
+

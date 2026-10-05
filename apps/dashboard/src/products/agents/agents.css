@@ -612,3 +612,75 @@
     max-width: 100%;
   }
 }
+
+/* Tools picker on the new-agent page */
+
+.dash .tool-picker {
+  margin: 18px 0 6px;
+  padding: 0;
+  border: 0;
+}
+
+.dash .tool-picker legend {
+  margin-bottom: 4px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.dash .tool-picker .hint {
+  margin: 0 0 10px;
+}
+
+.dash .tool-picker-label {
+  margin: 14px 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dash .tool-picker-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+}
+
+.dash .agent-form .tool-choice,
+.dash .tool-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.dash .tool-choice:has(input:checked) {
+  border-color: #111;
+}
+
+.dash .agent-form .tool-choice input,
+.dash .tool-choice input {
+  width: auto;
+  flex: none;
+  margin: 2px 0 0;
+  padding: 0;
+}
+
+.dash .tool-choice span {
+  display: grid;
+  gap: 2px;
+}
+
+.dash .tool-choice strong {
+  font-size: 13px;
+  font-weight: 500;
+  color: #111;
+}
+
+.dash .tool-choice small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}

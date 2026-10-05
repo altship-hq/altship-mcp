@@ -12,6 +12,32 @@ export interface PlannedTool {
   reason: string;
 }
 
+/** Built-in tools any agent can be given, no MCP server needed (packages/agent-design BUILTIN_TOOLS). */
+export type BuiltinTool = "web_search" | "web_fetch" | "bash" | "read" | "write" | "edit" | "glob" | "grep";
+
+/** How built-in tools are switched on: by group. */
+export const BUILTIN_GROUPS: Record<"web" | "sandbox", BuiltinTool[]> = {
+  web: ["web_search", "web_fetch"],
+  sandbox: ["bash", "read", "write", "edit", "glob", "grep"],
+};
+
+export const BUILTIN_LABELS: Record<BuiltinTool, string> = {
+  web_search: "Web search",
+  web_fetch: "Read web pages",
+  bash: "Run commands",
+  read: "Read files",
+  write: "Write files",
+  edit: "Edit files",
+  glob: "Find files",
+  grep: "Search files",
+};
+
+export interface PlannedBuiltinTool {
+  tool: BuiltinTool;
+  permission: ToolPermission;
+  reason: string;
+}
+
 export interface PlannedAgent {
   key: string;
   name: string;
@@ -20,6 +46,8 @@ export interface PlannedAgent {
   description: string;
   instructions: string;
   tools: PlannedTool[];
+  /** Missing on agents created before built-in tools existed. */
+  builtinTools?: PlannedBuiltinTool[];
 }
 
 export interface AgentPlan {
@@ -95,18 +123,31 @@ export function getCatalog(): Promise<Catalog> {
   return getJson<Catalog>("/api/agents/catalog");
 }
 
-export function proposePlan(request: {
-  name: string;
-  description: string;
-  feedback?: string;
-  previousPlan?: AgentPlan;
-  focusDeploymentId?: string;
-}): Promise<{ plan: AgentPlan; catalog: CatalogServer[] }> {
+/** The tools the user chose for an agent: MCP servers (may be none) and built-in tools. */
+export interface ToolChoice {
+  serverDeploymentIds: string[];
+  builtinTools: BuiltinTool[];
+}
+
+export function proposePlan(
+  request: {
+    name: string;
+    description: string;
+    feedback?: string;
+    previousPlan?: AgentPlan;
+    focusDeploymentId?: string;
+  } & ToolChoice,
+): Promise<{ plan: AgentPlan; catalog: CatalogServer[] }> {
   return postJson("/api/agents/plan", request);
 }
 
-export function approvePlan(plan: AgentPlan): Promise<AgentRecord> {
-  return postJson<AgentRecord>("/api/agents", { plan });
+export function approvePlan(plan: AgentPlan, tools: ToolChoice): Promise<AgentRecord> {
+  return postJson<AgentRecord>("/api/agents", { plan, ...tools });
+}
+
+/** Every tool an agent can use (MCP and built-in), e.g. for counts. */
+export function toolCountOf(agent: PlannedAgent): number {
+  return agent.tools.length + (agent.builtinTools?.length ?? 0);
 }
 
 export function listAgents(): Promise<AgentRecord[]> {

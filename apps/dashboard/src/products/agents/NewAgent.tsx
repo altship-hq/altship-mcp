@@ -10,7 +10,12 @@ import {
   type Catalog,
   type CatalogServer,
   type PlannedAgent,
+  type PlannedBuiltinTool,
   type PlannedTool,
+  type ToolChoice,
+  BUILTIN_GROUPS,
+  BUILTIN_LABELS,
+  toolCountOf,
 } from "./api.js";
 
 const MODELS: { id: AgentModel; label: string }[] = [
@@ -35,6 +40,11 @@ export default function NewAgent() {
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState<null | "planning" | "approving">(null);
   const [error, setError] = useState<string | null>(null);
+  // Tools the agent may use. No MCP server is required: web is on by default,
+  // the sandbox off, and servers start unticked (except one you came from).
+  const [useWeb, setUseWeb] = useState(true);
+  const [useSandbox, setUseSandbox] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(() => new Set(focusDeploymentId ? [focusDeploymentId] : []));
 
   useEffect(() => {
     getCatalog()
@@ -42,8 +52,18 @@ export default function NewAgent() {
       .catch((err) => setError(`Couldn't load your MCP servers: ${err instanceof Error ? err.message : String(err)}`));
   }, []);
 
-  const servers = useMemo(() => new Map((catalog?.servers ?? []).map((s) => [s.name, s])), [catalog]);
-  const focusServer = catalog?.servers.find((s) => s.deploymentId === focusDeploymentId);
+  const toolChoice: ToolChoice = useMemo(
+    () => ({
+      serverDeploymentIds: (catalog?.servers ?? []).filter((s) => picked.has(s.deploymentId)).map((s) => s.deploymentId),
+      builtinTools: [...(useWeb ? BUILTIN_GROUPS.web : []), ...(useSandbox ? BUILTIN_GROUPS.sandbox : [])],
+    }),
+    [catalog, picked, useWeb, useSandbox],
+  );
+  // Only the servers chosen for this agent can appear in its plan.
+  const servers = useMemo(
+    () => new Map((catalog?.servers ?? []).filter((s) => picked.has(s.deploymentId)).map((s) => [s.name, s])),
+    [catalog, picked],
+  );
 
   async function runPlanner(revise: boolean) {
     setBusy("planning");
@@ -53,6 +73,7 @@ export default function NewAgent() {
         name: plan?.name ?? name.trim(),
         description: description.trim(),
         focusDeploymentId,
+        ...toolChoice,
         ...(revise && plan ? { previousPlan: plan, feedback: feedback.trim() } : {}),
       });
       setPlan(result.plan);
@@ -70,7 +91,7 @@ export default function NewAgent() {
     setBusy("approving");
     setError(null);
     try {
-      const agent = await approvePlan(plan);
+      const agent = await approvePlan(plan, toolChoice);
       navigate(`agents/${agent.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -103,7 +124,22 @@ export default function NewAgent() {
             placeholder="Read new support tickets, look up the customer's orders, and draft a reply. Refunds over $100 need a human."
           />
 
-          <CatalogNote catalog={catalog} focusServer={focusServer} />
+          <ToolPicker
+            catalog={catalog}
+            useWeb={useWeb}
+            useSandbox={useSandbox}
+            picked={picked}
+            onWeb={setUseWeb}
+            onSandbox={setUseSandbox}
+            onToggleServer={(id) =>
+              setPicked((current) => {
+                const next = new Set(current);
+                if (next.has(id)) next.delete(id);
+                else next.add(id);
+                return next;
+              })
+            }
+          />
 
           <div className="form-actions">
             <button
@@ -120,7 +156,7 @@ export default function NewAgent() {
     );
   }
 
-  const toolCount = plan.agents.reduce((n, a) => n + a.tools.length, 0);
+  const toolCount = plan.agents.reduce((n, a) => n + toolCountOf(a), 0);
 
   return (
     <>
@@ -149,6 +185,7 @@ export default function NewAgent() {
                 agent={agent}
                 team={plan.flow === "team"}
                 servers={servers}
+                allowedBuiltins={toolChoice.builtinTools}
                 onChange={(patch) => updateAgent(agent.key, patch)}
               />
             ))}
@@ -218,31 +255,76 @@ export default function NewAgent() {
   );
 }
 
-function CatalogNote({ catalog, focusServer }: { catalog: Catalog | null; focusServer?: CatalogServer }) {
-  if (!catalog) return <p className="hint">Loading your MCP servers…</p>;
-  if (catalog.servers.length === 0) {
-    return (
-      <p className="hint">
-        You don't have any MCP servers yet, so the agent won't have tools.{" "}
-        <Link to="mcp/new" className="inline-link">
-          Build one in MCP Creator
-        </Link>{" "}
-        first, or continue and add tools later.
-      </p>
-    );
-  }
+/** Which tools the agent may use: built-in ones (no MCP server needed) and any of your MCP servers. */
+function ToolPicker({
+  catalog,
+  useWeb,
+  useSandbox,
+  picked,
+  onWeb,
+  onSandbox,
+  onToggleServer,
+}: {
+  catalog: Catalog | null;
+  useWeb: boolean;
+  useSandbox: boolean;
+  picked: Set<string>;
+  onWeb: (on: boolean) => void;
+  onSandbox: (on: boolean) => void;
+  onToggleServer: (deploymentId: string) => void;
+}) {
   return (
-    <p className="hint">
-      {focusServer ? (
-        <>
-          Starting from <strong>{focusServer.title}</strong>. The agent can also use tools from{" "}
-        </>
+    <fieldset className="tool-picker">
+      <legend>Tools it can use</legend>
+      <p className="hint">Pick what this agent may use; the plan only proposes tools from here. None is fine for an agent that just talks.</p>
+
+      <div className="tool-picker-group">
+        <label className="tool-choice">
+          <input type="checkbox" checked={useWeb} onChange={(e) => onWeb(e.target.checked)} />
+          <span>
+            <strong>Web</strong>
+            <small>Search the web and read pages.</small>
+          </span>
+        </label>
+        <label className="tool-choice">
+          <input type="checkbox" checked={useSandbox} onChange={(e) => onSandbox(e.target.checked)} />
+          <span>
+            <strong>Code &amp; files</strong>
+            <small>A private sandbox to run commands and code, and read and write files.</small>
+          </span>
+        </label>
+      </div>
+
+      <div className="tool-picker-label">Your MCP servers</div>
+      {!catalog ? (
+        <p className="hint">Loading your MCP servers…</p>
+      ) : catalog.servers.length === 0 ? (
+        <p className="hint">
+          None yet. Agents don't need one;{" "}
+          <Link to="mcp/new" className="inline-link">
+            build one in MCP Creator
+          </Link>{" "}
+          to connect your own API.
+        </p>
       ) : (
-        "The agent can use tools from "
+        <div className="tool-picker-group">
+          {catalog.servers.map((s) => (
+            <label key={s.deploymentId} className="tool-choice">
+              <input type="checkbox" checked={picked.has(s.deploymentId)} onChange={() => onToggleServer(s.deploymentId)} />
+              <span>
+                <strong>{s.title}</strong>
+                <small>
+                  {s.tools.length} tool{s.tools.length === 1 ? "" : "s"}
+                </small>
+              </span>
+            </label>
+          ))}
+        </div>
       )}
-      {catalog.servers.map((s) => s.title).join(", ")}.
-      {catalog.unavailable.length > 0 && ` Not available yet: ${catalog.unavailable.map((u) => u.title).join(", ")}.`}
-    </p>
+      {catalog && catalog.unavailable.length > 0 && (
+        <p className="hint">Can't be used by agents: {catalog.unavailable.map((u) => `${u.title} (${u.reason})`).join("; ")}</p>
+      )}
+    </fieldset>
   );
 }
 
@@ -250,15 +332,21 @@ function AgentCard({
   agent,
   team,
   servers,
+  allowedBuiltins,
   onChange,
 }: {
   agent: PlannedAgent;
   team: boolean;
   servers: Map<string, CatalogServer>;
+  allowedBuiltins: ToolChoice["builtinTools"];
   onChange: (patch: Partial<PlannedAgent>) => void;
 }) {
+  const builtins = agent.builtinTools ?? [];
   const setTool = (index: number, patch: Partial<PlannedTool>) =>
     onChange({ tools: agent.tools.map((t, i) => (i === index ? { ...t, ...patch } : t)) });
+  const setBuiltin = (index: number, patch: Partial<PlannedBuiltinTool>) =>
+    onChange({ builtinTools: builtins.map((t, i) => (i === index ? { ...t, ...patch } : t)) });
+  const addableBuiltins = allowedBuiltins.filter((tool) => !builtins.some((b) => b.tool === tool));
 
   const addable = [...servers.values()].flatMap((s) =>
     s.tools
@@ -296,7 +384,37 @@ function AgentCard({
       </details>
 
       <div className="tool-table">
-        {agent.tools.length === 0 && <div className="tool-empty">No tools — this agent can only reason and delegate.</div>}
+        {toolCountOf(agent) === 0 && (
+          <div className="tool-empty">No tools — this agent answers from its instructions{team ? " and delegates" : ""}.</div>
+        )}
+        {builtins.map((t, i) => (
+          <div key={t.tool} className="tool-row is-selected plan-tool-row">
+            <button
+              type="button"
+              className="tool-remove"
+              onClick={() => onChange({ builtinTools: builtins.filter((_, j) => j !== i) })}
+              aria-label={`Remove ${BUILTIN_LABELS[t.tool]}`}
+              title="Remove this tool"
+            >
+              ×
+            </button>
+            <div className="tool-main">
+              <div className="tool-name">{BUILTIN_LABELS[t.tool]}</div>
+              {t.reason && <p className="tool-desc">{t.reason}</p>}
+            </div>
+            <div className="tool-side">
+              <span className="tool-server">Built-in</span>
+              <select
+                value={t.permission}
+                onChange={(e) => setBuiltin(i, { permission: e.target.value as PlannedBuiltinTool["permission"] })}
+                aria-label={`Permission for ${BUILTIN_LABELS[t.tool]}`}
+              >
+                <option value="auto">Auto</option>
+                <option value="ask">Ask</option>
+              </select>
+            </div>
+          </div>
+        ))}
         {agent.tools.map((t, i) => {
           const server = servers.get(t.server);
           const catalogTool = server?.tools.find((c) => c.name === t.tool);
@@ -337,11 +455,16 @@ function AgentCard({
         })}
       </div>
 
-      {addable.length > 0 && (
+      {addable.length + addableBuiltins.length > 0 && (
         <select
           className="add-tool"
           value=""
           onChange={(e) => {
+            if (e.target.value.startsWith("builtin:")) {
+              const tool = e.target.value.slice("builtin:".length) as PlannedBuiltinTool["tool"];
+              onChange({ builtinTools: [...builtins, { tool, permission: "auto", reason: "Added by you." }] });
+              return;
+            }
             const pick = addable[Number(e.target.value)];
             if (!pick) return;
             onChange({
@@ -354,6 +477,11 @@ function AgentCard({
           aria-label="Add a tool"
         >
           <option value="">+ Add a tool…</option>
+          {addableBuiltins.map((tool) => (
+            <option key={tool} value={`builtin:${tool}`}>
+              {BUILTIN_LABELS[tool]} — Built-in
+            </option>
+          ))}
           {addable.map((a, i) => (
             <option key={`${a.server.name}/${a.tool.name}`} value={i}>
               {a.tool.name} — {a.server.title}

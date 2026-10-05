@@ -1,9 +1,9 @@
 import { Router, type Request, type Response } from "express";
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
-import { PlanError, validatePlan, type AgentPlan } from "@altship/agent-design";
+import { BUILTIN_TOOLS, PlanError, validatePlan, type AgentPlan, type BuiltinTool } from "@altship/agent-design";
 import { AgentConfigError } from "./anthropic.js";
-import { loadCatalog, toToolCatalog } from "./catalog.js";
+import { loadCatalog, serversUsedBy, toToolCatalog, type CatalogEntry } from "./catalog.js";
 import { planAgent, PlannerError } from "./planner.js";
 import { confirmToolCall, createAgentVault, createManagedAgents, followSession, sendUserMessage, startSession } from "./runtime.js";
 import { requireAuth, userIdOf } from "../auth.js";
@@ -40,12 +40,27 @@ agentsRouter.get("/catalog", async (req, res) => {
   res.json(await loadCatalog(userIdOf(req)));
 });
 
+/**
+ * The tools the user chose for this agent: MCP servers they ticked (none by
+ * default) and built-in tools they turned on. Agents don't need any MCP server.
+ */
+async function chosenTools(req: Request): Promise<{ servers: CatalogEntry[]; allowedBuiltins: BuiltinTool[] }> {
+  const ids: unknown = req.body?.serverDeploymentIds;
+  const wanted = new Set(Array.isArray(ids) ? ids.filter((v): v is string => typeof v === "string") : []);
+  const builtins: unknown = req.body?.builtinTools;
+  const allowedBuiltins = Array.isArray(builtins)
+    ? BUILTIN_TOOLS.filter((tool) => builtins.includes(tool))
+    : [];
+  const servers = wanted.size > 0 ? (await loadCatalog(userIdOf(req))).servers.filter((s) => wanted.has(s.deploymentId)) : [];
+  return { servers, allowedBuiltins };
+}
+
 agentsRouter.post("/plan", async (req, res) => {
   const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
   const description = typeof req.body?.description === "string" ? req.body.description.trim() : "";
   if (!name || !description) return res.status(400).json({ error: "Give the agent a name and a description." });
 
-  const { servers } = await loadCatalog(userIdOf(req));
+  const { servers, allowedBuiltins } = await chosenTools(req);
   const focus = typeof req.body?.focusDeploymentId === "string" ? servers.find((s) => s.deploymentId === req.body.focusDeploymentId) : undefined;
   const plan = await planAgent(
     {
@@ -54,6 +69,7 @@ agentsRouter.post("/plan", async (req, res) => {
       feedback: typeof req.body?.feedback === "string" && req.body.feedback.trim() ? req.body.feedback.trim() : undefined,
       previousPlan: req.body?.previousPlan as AgentPlan | undefined,
       focusServer: focus?.name,
+      allowedBuiltins,
     },
     toToolCatalog(servers),
   );
@@ -62,13 +78,15 @@ agentsRouter.post("/plan", async (req, res) => {
 
 // Approve: create the Managed Agents and save the agent.
 agentsRouter.post("/", async (req, res) => {
-  const { servers } = await loadCatalog(userIdOf(req));
+  const { servers, allowedBuiltins } = await chosenTools(req);
   const catalog = toToolCatalog(servers);
-  const plan = validatePlan(req.body?.plan, catalog);
+  const plan = validatePlan(req.body?.plan, catalog, { allowedBuiltins });
 
   const { coordinator, specialists } = await createManagedAgents(plan, catalog);
   const id = `agt_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
-  const vaultId = await createAgentVault(id, servers);
+  // A vault only when the agent calls MCP servers (it holds their access keys).
+  const used = serversUsedBy(plan, servers);
+  const vaultId = used.length > 0 ? await createAgentVault(id, used) : null;
   const record = await insertAgent({
     id,
     userId: userIdOf(req),
@@ -216,8 +234,9 @@ async function runResponse(sessionId: string, tracker: Awaited<ReturnType<typeof
 /** Agents created before access keys existed get their vault on first use. */
 async function withVault(agent: AgentRecord): Promise<AgentRecord> {
   if (agent.vaultId) return agent;
-  const { servers } = await loadCatalog(agent.userId);
-  const vaultId = await createAgentVault(agent.id, servers);
+  const used = serversUsedBy(agent.plan, (await loadCatalog(agent.userId)).servers);
+  if (used.length === 0) return agent; // no MCP servers: nothing to authorize
+  const vaultId = await createAgentVault(agent.id, used);
   await setAgentVault(agent.id, vaultId);
   return { ...agent, vaultId };
 }

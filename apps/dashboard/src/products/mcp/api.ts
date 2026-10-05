@@ -145,3 +145,46 @@ export function revokeConnection(deploymentId: string, connectionId: string): Pr
 export function revokeAccessKey(deploymentId: string, keyId: string): Promise<{ ok: true }> {
   return deleteJson(`/api/deployments/${deploymentId}/keys/${keyId}`);
 }
+
+/** Another altship user who may sign in to a private server. */
+export interface Member {
+  userId: string;
+  email: string;
+  createdAt: string;
+}
+
+/** An invite nobody has accepted yet. `link` is what the invited person opens. */
+export interface Invite {
+  id: string;
+  email: string;
+  createdAt: string;
+  link: string;
+}
+
+export function listMembers(deploymentId: string): Promise<{ members: Member[]; invites: Invite[] }> {
+  return getJson(`/api/deployments/${deploymentId}/members`);
+}
+
+/** `emailed` is false when altship couldn't email the invite, so the link has to be sent by hand. */
+export function inviteMember(deploymentId: string, email: string): Promise<Invite & { emailed: boolean }> {
+  return postJson(`/api/deployments/${deploymentId}/invites`, { email });
+}
+
+export function cancelInvite(deploymentId: string, inviteId: string): Promise<{ ok: true }> {
+  return deleteJson(`/api/deployments/${deploymentId}/invites/${inviteId}`);
+}
+
+export function removeMember(deploymentId: string, userId: string): Promise<{ ok: true }> {
+  return deleteJson(`/api/deployments/${deploymentId}/members/${userId}`);
+}
+
+/** The server an accepted invite gives access to. */
+export interface AcceptedInvite {
+  apiTitle: string;
+  mcpUrl: string;
+  toolCount: number;
+}
+
+export function acceptInvite(inviteId: string): Promise<AcceptedInvite> {
+  return postJson(`/api/invites/${encodeURIComponent(inviteId)}/accept`, {});
+}

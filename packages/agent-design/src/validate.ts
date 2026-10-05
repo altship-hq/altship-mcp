@@ -1,10 +1,14 @@
 import {
   AGENT_MODELS,
+  BUILTIN_GROUPS,
+  BUILTIN_TOOLS,
   type AgentModel,
+  type BuiltinTool,
   type AgentPlan,
   type CatalogTool,
   type PlanGap,
   type PlannedAgent,
+  type PlannedBuiltinTool,
   type PlannedTool,
   type ToolCatalog,
 } from "./types.js";
@@ -19,11 +23,18 @@ export class PlanError extends Error {}
  * Checks a plan (from the planner or edited by the user — treat both as
  * untrusted) against the real tool catalog and returns a normalized copy:
  * - tools that aren't in the catalog are removed and reported as gaps
+ * - built-in tools the user didn't enable are removed and reported as gaps
  * - destructive tools always require approval ("ask")
  * - unknown models fall back to the default model
  * - agent keys and names are unique; a team has exactly one coordinator
  */
-export function validatePlan(raw: unknown, catalog: ToolCatalog): AgentPlan {
+export interface ValidateOptions {
+  /** Built-in tools the user enabled for this agent; others are dropped. */
+  allowedBuiltins?: readonly BuiltinTool[];
+}
+
+export function validatePlan(raw: unknown, catalog: ToolCatalog, options: ValidateOptions = {}): AgentPlan {
+  const allowedBuiltins = new Set(options.allowedBuiltins ?? []);
   const input = asObject(raw, "plan");
   const agentsIn = asArray(input.agents, "plan.agents");
   if (agentsIn.length === 0) throw new PlanError("A plan needs at least one agent.");
@@ -40,6 +51,7 @@ export function validatePlan(raw: unknown, catalog: ToolCatalog): AgentPlan {
     const name = uniqueName(asString(agent.name, "agent.name").trim() || `Agent ${i + 1}`, usedNames);
     const key = uniqueKey(slugify(asString(agent.key ?? "", "agent.key")) || slugify(name) || `agent-${i + 1}`, usedKeys);
     const tools = normalizeTools(asArray(agent.tools ?? [], `${name}.tools`), catalog, gaps);
+    const builtinTools = normalizeBuiltinTools(asArray(agent.builtinTools ?? [], `${name}.builtinTools`), allowedBuiltins, gaps);
     return {
       key,
       name,
@@ -48,6 +60,7 @@ export function validatePlan(raw: unknown, catalog: ToolCatalog): AgentPlan {
       description: asString(agent.description ?? "", "agent.description").trim(),
       instructions: asString(agent.instructions ?? "", "agent.instructions").trim(),
       tools,
+      builtinTools,
     };
   });
 
@@ -103,6 +116,41 @@ function normalizeTools(rawTools: unknown[], catalog: ToolCatalog, gaps: PlanGap
       permission: catalogTool.destructive ? "ask" : t.permission === "ask" ? "ask" : "auto",
       reason: asString(t.reason ?? "", "tool.reason"),
     });
+  }
+
+  return tools;
+}
+
+const BUILTIN_LABELS: Record<BuiltinTool, string> = {
+  web_search: "Web search",
+  web_fetch: "Read web pages",
+  bash: "Run commands",
+  read: "Read files",
+  write: "Write files",
+  edit: "Edit files",
+  glob: "Find files",
+  grep: "Search files",
+};
+
+export function builtinLabel(tool: BuiltinTool): string {
+  return BUILTIN_LABELS[tool];
+}
+
+function normalizeBuiltinTools(rawTools: unknown[], allowed: Set<BuiltinTool>, gaps: PlanGap[]): PlannedBuiltinTool[] {
+  const seen = new Set<BuiltinTool>();
+  const tools: PlannedBuiltinTool[] = [];
+
+  for (const [i, raw] of rawTools.entries()) {
+    const t = asObject(raw, `builtinTools[${i}]`);
+    const tool = asString(t.tool, "builtinTool.tool") as BuiltinTool;
+    if (!BUILTIN_TOOLS.includes(tool) || seen.has(tool)) continue;
+    if (!allowed.has(tool)) {
+      const group = (BUILTIN_GROUPS.web as readonly string[]).includes(tool) ? "Web" : "Code & files";
+      gaps.push({ capability: BUILTIN_LABELS[tool], suggestion: `Turn on ${group} for this agent to let it do this.` });
+      continue;
+    }
+    seen.add(tool);
+    tools.push({ tool, permission: t.permission === "ask" ? "ask" : "auto", reason: asString(t.reason ?? "", "builtinTool.reason") });
   }
 
   return tools;

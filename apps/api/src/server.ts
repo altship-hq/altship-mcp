@@ -3,7 +3,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import cors from "cors";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
 import { validateSpec, type SpecInput } from "@altship/openapi";
 import { designTools } from "@altship/tool-design";
@@ -17,12 +17,25 @@ import {
   listServerKeys,
   activeKeyHashes,
   revokeServerKey,
+  getDeploymentById,
+  listMembers,
+  addMember,
+  removeMember,
+  memberIds,
+  createInvite,
+  listPendingInvites,
+  getInvite,
+  cancelInvite,
+  markInviteAccepted,
+  deleteAcceptedInvites,
   type ConnectSettings,
   type DeploymentRecord,
+  type InviteRecord,
 } from "./store.js";
 import { AccessKeyConfigError, displayPrefix, generateAccessKey, hashAccessKey } from "./access-keys.js";
 import { AudienceError, applyAccessEnv, parseAudience } from "./server-access.js";
-import { requireAuth, userIdOf } from "./auth.js";
+import { confirmedEmailOf, requireAuth, userIdOf } from "./auth.js";
+import { inviteLink, sendInviteEmail } from "./email.js";
 import { agentsRouter, agentsErrorHandler } from "./agents/router.js";
 import { endUsersRouter } from "./end-users/router.js";
 import { listConnections, revokeConnection } from "./end-users/store.js";
@@ -60,7 +73,7 @@ app.get("/api/health", (_req, res) => {
 app.use("/api/agents", agentsRouter, agentsErrorHandler);
 
 // Everything else is the MCP Creator dashboard API: signed-in users only.
-app.use(["/api/tools", "/api/generate", "/api/deployments", "/api/deploy"], requireAuth);
+app.use(["/api/tools", "/api/generate", "/api/deployments", "/api/deploy", "/api/invites"], requireAuth);
 
 app.post("/api/tools", async (req, res) => {
   const spec = specInput(req.body);
@@ -201,6 +214,7 @@ app.post("/api/deploy", async (req, res) => {
       audience,
       projectId: project.id,
       ownerId: userIdOf(req),
+      memberIds: [],
       keyHashes: accessKey ? [hashAccessKey(accessKey)] : [],
     });
 
@@ -317,12 +331,115 @@ app.delete("/api/deployments/:id/connections/:connectionId", async (req, res) =>
   res.json({ ok: true });
 });
 
-/** Pushes the deployment's current access settings to its env and redeploys so they take effect. */
+// ---- People (other altship users who may sign in to a private server) ----
+// The owner invites an email address; whoever signs in with that address and
+// opens the invite link becomes a member.
+
+const MAX_MEMBERS = 50;
+
+app.get("/api/deployments/:id/members", async (req, res) => {
+  const deployment = await getDeployment(String(req.params.id), userIdOf(req));
+  if (!deployment) return res.status(404).json({ error: "MCP server not found." });
+  if (deployment.audience !== "private") return res.json({ members: [], invites: [] });
+  const [members, invites] = await Promise.all([listMembers(deployment.id), listPendingInvites(deployment.id)]);
+  res.json({ members, invites: invites.map(inviteView) });
+});
+
+app.post("/api/deployments/:id/invites", async (req, res) => {
+  const deployment = await getDeployment(String(req.params.id), userIdOf(req));
+  if (!deployment) return res.status(404).json({ error: "MCP server not found." });
+  if (deployment.audience !== "private") {
+    return res.status(400).json({ error: "Servers for your customers don't have people to invite; each person signs in with their own credential." });
+  }
+  if (deployment.authMode === "passthrough") {
+    return res.status(400).json({ error: "This server forwards each caller's own token, so it has no altship sign-in. Share an access key instead." });
+  }
+  const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: "Enter a valid email address." });
+  }
+  const ownerEmail = confirmedEmailOf(req);
+  if (email === ownerEmail) {
+    return res.status(400).json({ error: "That's you. As the owner you can already sign in to this server." });
+  }
+
+  const [members, pending] = await Promise.all([listMembers(deployment.id), listPendingInvites(deployment.id)]);
+  if (members.some((m) => m.email === email)) {
+    return res.status(400).json({ error: "That person already has access." });
+  }
+  if (!pending.some((i) => i.email === email) && members.length + pending.length >= MAX_MEMBERS) {
+    return res.status(400).json({ error: `A server can have up to ${MAX_MEMBERS} people, including pending invites.` });
+  }
+
+  const { invite, created } = await createInvite({ id: newInviteId(), deploymentId: deployment.id, email });
+  // An invite that was already pending isn't emailed again.
+  const emailed = created
+    ? await sendInviteEmail({ to: email, inviterEmail: ownerEmail, serverName: deployment.apiTitle, link: inviteLink(invite.id) })
+    : false;
+  res.status(201).json({ ...inviteView(invite), emailed });
+});
+
+app.delete("/api/deployments/:id/invites/:inviteId", async (req, res) => {
+  const deployment = await getDeployment(String(req.params.id), userIdOf(req));
+  if (!deployment) return res.status(404).json({ error: "MCP server not found." });
+  if (!(await cancelInvite(String(req.params.inviteId), deployment.id))) {
+    return res.status(404).json({ error: "Invite not found." });
+  }
+  res.json({ ok: true });
+});
+
+app.delete("/api/deployments/:id/members/:userId", async (req, res) => {
+  const deployment = await getDeployment(String(req.params.id), userIdOf(req));
+  if (!deployment) return res.status(404).json({ error: "MCP server not found." });
+  const userId = String(req.params.userId);
+  if (!/^[0-9a-f-]{36}$/i.test(userId) || !(await removeMember(deployment.id, userId))) {
+    return res.status(404).json({ error: "Person not found." });
+  }
+  await deleteAcceptedInvites(deployment.id, userId);
+  await syncAccessKeys(deployment);
+  res.json({ ok: true });
+});
+
+// Accepting an invite: any signed-in user, but only the one it was sent to.
+app.post("/api/invites/:id/accept", async (req, res) => {
+  const invite = await getInvite(String(req.params.id));
+  const deployment = invite ? await getDeploymentById(invite.deploymentId) : null;
+  if (!invite || !deployment || deployment.audience !== "private") {
+    return res.status(404).json({ error: "This invite doesn't exist or was cancelled." });
+  }
+  const email = confirmedEmailOf(req);
+  if (!email) {
+    return res.status(403).json({ error: "Confirm your email address first, then open the invite link again." });
+  }
+  if (email !== invite.email) {
+    return res.status(403).json({ error: `This invite was sent to ${invite.email}, and you're signed in as ${email}. Sign in with that account to accept it.` });
+  }
+
+  const userId = userIdOf(req);
+  if (invite.acceptedBy !== userId) {
+    // Marked accepted last, so opening the link again retries a failed server update.
+    await addMember({ deploymentId: deployment.id, userId, email });
+    await syncAccessKeys(deployment);
+    await markInviteAccepted(invite.id, userId);
+  }
+  res.json({ apiTitle: deployment.apiTitle, mcpUrl: mcpEndpoint(deployment.url), toolCount: deployment.toolNames.length });
+});
+
+function inviteView(invite: InviteRecord) {
+  return { id: invite.id, email: invite.email, createdAt: invite.createdAt, link: inviteLink(invite.id) };
+}
+
+function newInviteId(): string {
+  return `inv_${randomBytes(16).toString("hex")}`;
+}
+
+/** Pushes the deployment's current access settings (keys and people) to its env and redeploys so they take effect. */
 async function syncAccessKeys(deployment: DeploymentRecord) {
   await applyAccessEnv({
     audience: deployment.audience,
     projectId: deployment.projectId,
     ownerId: deployment.userId,
+    memberIds: await memberIds(deployment.id),
     keyHashes: await activeKeyHashes(deployment.id),
   });
   await redeploy({ id: deployment.projectId, name: deployment.projectName }, deployment.id);

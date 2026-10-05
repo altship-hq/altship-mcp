@@ -225,3 +225,162 @@ export async function revokeServerKey(keyId: string, deploymentId: string, userI
   if (error) throw new Error(`Failed to revoke access key: ${error.message}`);
   return (data ?? []).length > 0;
 }
+
+/** Another altship user the owner has let connect to a private server. */
+export interface MemberRecord {
+  userId: string;
+  email: string;
+  createdAt: string;
+}
+
+interface MemberRow {
+  deployment_id: string;
+  user_id: string;
+  email: string;
+  created_at: string;
+}
+
+function fromMemberRow(row: MemberRow): MemberRecord {
+  return { userId: row.user_id, email: row.email, createdAt: row.created_at };
+}
+
+export async function listMembers(deploymentId: string): Promise<MemberRecord[]> {
+  const { data, error } = await getSupabase()
+    .from("deployment_members")
+    .select("*")
+    .eq("deployment_id", deploymentId)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`Failed to list people: ${error.message}`);
+  return (data as MemberRow[]).map(fromMemberRow);
+}
+
+/** Adding someone who's already there leaves them as they were. */
+export async function addMember(member: { deploymentId: string; userId: string; email: string }): Promise<MemberRecord> {
+  const { error } = await getSupabase()
+    .from("deployment_members")
+    .upsert(
+      { deployment_id: member.deploymentId, user_id: member.userId, email: member.email },
+      { onConflict: "deployment_id,user_id", ignoreDuplicates: true },
+    );
+  if (error) throw new Error(`Failed to add person: ${error.message}`);
+  const { data, error: readError } = await getSupabase()
+    .from("deployment_members")
+    .select("*")
+    .eq("deployment_id", member.deploymentId)
+    .eq("user_id", member.userId)
+    .single();
+  if (readError) throw new Error(`Failed to add person: ${readError.message}`);
+  return fromMemberRow(data as MemberRow);
+}
+
+/** Returns false if that user wasn't one of the deployment's people. */
+export async function removeMember(deploymentId: string, userId: string): Promise<boolean> {
+  const { data, error } = await getSupabase()
+    .from("deployment_members")
+    .delete()
+    .eq("deployment_id", deploymentId)
+    .eq("user_id", userId)
+    .select("user_id");
+  if (error) throw new Error(`Failed to remove person: ${error.message}`);
+  return (data ?? []).length > 0;
+}
+
+/** Ids of a deployment's people -- what its MCP_OAUTH_ALLOWED_SUBJECTS should hold, after the owner. */
+export async function memberIds(deploymentId: string): Promise<string[]> {
+  const { data, error } = await getSupabase().from("deployment_members").select("user_id").eq("deployment_id", deploymentId);
+  if (error) throw new Error(`Failed to load people: ${error.message}`);
+  return (data as { user_id: string }[]).map((r) => r.user_id);
+}
+
+/** An invite to a private server. `id` is the token in the invite link. */
+export interface InviteRecord {
+  id: string;
+  deploymentId: string;
+  email: string;
+  createdAt: string;
+  /** Null while pending. */
+  acceptedBy: string | null;
+}
+
+interface InviteRow {
+  id: string;
+  deployment_id: string;
+  email: string;
+  created_at: string;
+  accepted_by: string | null;
+}
+
+function fromInviteRow(row: InviteRow): InviteRecord {
+  return {
+    id: row.id,
+    deploymentId: row.deployment_id,
+    email: row.email,
+    createdAt: row.created_at,
+    acceptedBy: row.accepted_by,
+  };
+}
+
+/** Creates an invite, or returns the one that email already has (`created` false). */
+export async function createInvite(invite: { id: string; deploymentId: string; email: string }): Promise<{ invite: InviteRecord; created: boolean }> {
+  const { data: inserted, error } = await getSupabase()
+    .from("deployment_invites")
+    .upsert(
+      { id: invite.id, deployment_id: invite.deploymentId, email: invite.email },
+      { onConflict: "deployment_id,email", ignoreDuplicates: true },
+    )
+    .select("*");
+  if (error) throw new Error(`Failed to save invite: ${error.message}`);
+  if (inserted && inserted.length > 0) return { invite: fromInviteRow(inserted[0] as InviteRow), created: true };
+
+  const { data, error: readError } = await getSupabase()
+    .from("deployment_invites")
+    .select("*")
+    .eq("deployment_id", invite.deploymentId)
+    .eq("email", invite.email)
+    .single();
+  if (readError) throw new Error(`Failed to save invite: ${readError.message}`);
+  return { invite: fromInviteRow(data as InviteRow), created: false };
+}
+
+/** Invites nobody has accepted yet. */
+export async function listPendingInvites(deploymentId: string): Promise<InviteRecord[]> {
+  const { data, error } = await getSupabase()
+    .from("deployment_invites")
+    .select("*")
+    .eq("deployment_id", deploymentId)
+    .is("accepted_by", null)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`Failed to list invites: ${error.message}`);
+  return (data as InviteRow[]).map(fromInviteRow);
+}
+
+/** Any invite by id, regardless of owner (for the person accepting it). */
+export async function getInvite(id: string): Promise<InviteRecord | null> {
+  const { data, error } = await getSupabase().from("deployment_invites").select("*").eq("id", id).maybeSingle();
+  if (error) throw new Error(`Failed to load invite: ${error.message}`);
+  return data ? fromInviteRow(data as InviteRow) : null;
+}
+
+/** Returns false if the deployment has no pending invite with that id. */
+export async function cancelInvite(id: string, deploymentId: string): Promise<boolean> {
+  const { data, error } = await getSupabase()
+    .from("deployment_invites")
+    .delete()
+    .eq("id", id)
+    .eq("deployment_id", deploymentId)
+    .is("accepted_by", null)
+    .select("id");
+  if (error) throw new Error(`Failed to cancel invite: ${error.message}`);
+  return (data ?? []).length > 0;
+}
+
+export async function markInviteAccepted(id: string, userId: string): Promise<void> {
+  const { error } = await getSupabase().from("deployment_invites").update({ accepted_by: userId }).eq("id", id);
+  if (error) throw new Error(`Failed to accept invite: ${error.message}`);
+}
+
+/** Drops a removed person's invite, so their old link stops working. */
+export async function deleteAcceptedInvites(deploymentId: string, userId: string): Promise<void> {
+  const { error } = await getSupabase().from("deployment_invites").delete().eq("deployment_id", deploymentId).eq("accepted_by", userId);
+  if (error) throw new Error(`Failed to remove invite: ${error.message}`);
+}

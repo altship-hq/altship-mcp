@@ -1,4 +1,4 @@
-import { AGENT_PLAN_SCHEMA, validatePlan, type AgentPlan, type ToolCatalog } from "@altship/agent-design";
+import { AGENT_PLAN_SCHEMA, validatePlan, type AgentPlan, type BuiltinTool, type ToolCatalog } from "@altship/agent-design";
 import { getAnthropic } from "./anthropic.js";
 
 export interface PlanRequest {
@@ -9,16 +9,23 @@ export interface PlanRequest {
   previousPlan?: AgentPlan;
   /** MCP server the user started from ("Create agent with this server"). */
   focusServer?: string;
+  /** Built-in tools the user enabled for this agent (may be none). */
+  allowedBuiltins: BuiltinTool[];
 }
 
 export class PlannerError extends Error {}
 
 const SYSTEM_PROMPT = `You design AI agents for altship's Agent Creator. The user names an agent and describes what it should do; you propose a plan they will review and approve before anything is created.
 
-The plan's agents run on Claude and can only use tools from the catalog of MCP servers you are given. Rules:
-- Use only tools that appear in the catalog, referenced by the exact server name and tool name. Never invent tools. If the description needs something no catalog tool provides, list it under gaps with a short suggestion instead.
+The plan's agents run on Claude. They can use only the tools you are given, which come in two kinds, and either list may be empty:
+- Built-in tools (<builtin_tools>), referenced by name in an agent's builtinTools: web_search (search the web), web_fetch (read a web page), and a private sandbox per session: bash (run commands and code), read, write, edit (files), glob, grep (find files and text).
+- MCP server tools (<catalog>), the user's own systems, referenced in an agent's tools by the exact server name and tool name.
+
+Rules:
+- Use only tools that are listed. Never invent tools. If the job needs something no listed tool provides, list it under gaps with a short suggestion: building an MCP server in MCP Creator for the user's own systems or data, or turning on Web or Code & files for things those would cover.
+- An agent that only needs to talk, write or reason gets no tools at all. That's fine.
 - Least privilege: give each agent only the tools its job needs, and say in one sentence why it needs each one.
-- Set permission "ask" for anything that deletes, modifies, sends, pays or is otherwise hard to undo; "auto" for reads. Destructive catalog tools always need "ask".
+- Permissions: "ask" for anything that deletes, modifies, sends, pays or is otherwise hard to undo; "auto" for reads. Destructive catalog tools always need "ask". Built-in sandbox tools only touch the agent's own disposable sandbox, so "auto" is usually right; web tools are "auto".
 - Prefer a single agent (flow "single", role "solo"). Use a team (flow "team": one "coordinator" plus "specialist"s) only when the work splits into distinct responsibilities that benefit from separate instructions or tools. The coordinator delegates to specialists by name and description, so describe each specialist's strengths clearly.
 - Models: "claude-opus-5" for the solo agent or coordinator; "claude-sonnet-5" for specialists that need judgment; "claude-haiku-4-5" for simple lookup or reading-heavy specialists.
 - Instructions are each agent's system prompt: say what it does, how to use its tools, when to stop and ask, and how to format answers. Be concrete and brief.
@@ -40,6 +47,7 @@ export async function planAgent(request: PlanRequest, catalog: ToolCatalog): Pro
   }));
 
   const parts = [
+    `<builtin_tools>${JSON.stringify(request.allowedBuiltins)}</builtin_tools>`,
     `<catalog>\n${JSON.stringify(catalogForPrompt, null, 2)}\n</catalog>`,
     `<agent_name>${request.name}</agent_name>`,
     `<agent_description>${request.description}</agent_description>`,
@@ -79,5 +87,5 @@ export async function planAgent(request: PlanRequest, catalog: ToolCatalog): Pro
   } catch {
     throw new PlannerError("The planner returned an unreadable plan. Try again.");
   }
-  return validatePlan(raw, catalog);
+  return validatePlan(raw, catalog, { allowedBuiltins: request.allowedBuiltins });
 }

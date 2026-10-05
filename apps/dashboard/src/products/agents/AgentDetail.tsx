@@ -14,6 +14,7 @@ import {
   type AgentUiEvent,
   type RunStatus,
   flowLabel,
+  toolCountOf,
 } from "./api.js";
 
 type Tab = "playground" | "deploy" | "runs";
@@ -33,7 +34,7 @@ export default function AgentDetail({ id, tab }: { id: string; tab: Tab }) {
   if (!agent) return <div className="empty">Loading…</div>;
 
   const specialists = agent.plan.agents.filter((a) => a.role === "specialist");
-  const toolCount = agent.plan.agents.reduce((n, a) => n + a.tools.length, 0);
+  const toolCount = agent.plan.agents.reduce((n, a) => n + toolCountOf(a), 0);
 
   return (
     <>

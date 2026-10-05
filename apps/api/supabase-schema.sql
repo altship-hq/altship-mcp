@@ -165,3 +165,38 @@ create index if not exists oauth_refresh_tokens_connection_idx on oauth_refresh_
 
 alter table oauth_refresh_tokens enable row level security;
 
+-- ---- People invited to a private MCP server ---------------------------------
+-- Other altship users who accepted the owner's invite to a private server and
+-- can connect by signing in with their own altship account. Their ids go into
+-- the server's MCP_OAUTH_ALLOWED_SUBJECTS next to the owner's. They can't see
+-- or manage the server in the dashboard.
+create table if not exists deployment_members (
+  deployment_id text not null references deployments(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- The address the owner invited, as shown back to them.
+  email text not null,
+  created_at timestamptz not null default now(),
+  primary key (deployment_id, user_id)
+);
+
+alter table deployment_members enable row level security;
+
+-- Invites to a private server. `id` is the unguessable token in the invite
+-- link (<dashboard>/invite/<id>). An invite is pending until someone signed in
+-- with a confirmed `email` opens the link, which makes them a member; the link
+-- alone grants nothing.
+create table if not exists deployment_invites (
+  id text primary key,
+  deployment_id text not null references deployments(id) on delete cascade,
+  -- Lowercased.
+  email text not null,
+  created_at timestamptz not null default now(),
+  -- Null while pending.
+  accepted_by uuid references auth.users(id) on delete cascade,
+  unique (deployment_id, email)
+);
+
+alter table deployment_invites enable row level security;
+
+-- From an earlier version that looked accounts up by email; no longer used.
+drop function if exists altship_user_id_by_email(text);

@@ -3,9 +3,11 @@
 // ANTHROPIC_ENVIRONMENT_ID. Run from apps/api: npx tsx scripts/setup-agents.ts
 import "dotenv/config";
 import Anthropic from "@anthropic-ai/sdk";
+import { anthropicOptions } from "../src/agents/anthropic.js";
 
 const NAME = "altship-agents";
-const client = new Anthropic();
+// Set ANTHROPIC_WORKSPACE_ID too if your API key isn't scoped to a workspace.
+const client = new Anthropic(anthropicOptions());
 
 for await (const env of client.beta.environments.list()) {
   if (env.name === NAME) {

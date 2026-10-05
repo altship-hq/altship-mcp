@@ -1,10 +1,11 @@
-import type { AgentPlan, PlannedAgent, ToolCatalog } from "./types.js";
+import type { AgentPlan, BuiltinTool, PlannedAgent, ToolCatalog } from "./types.js";
 
 // Translates an AgentPlan into Managed Agents `agents.create` bodies. Kept
 // free of the Anthropic SDK so it stays testable; the API casts these to the
 // SDK's param type. Shapes follow the Managed Agents docs: MCP servers are
 // declared on the agent without auth, and an `mcp_toolset` allowlists the
-// planned tools with a per-tool permission policy.
+// planned tools with a per-tool permission policy. Built-in tools (web,
+// sandbox) go in one `agent_toolset_20260401`, also allowlisted.
 
 export interface ManagedAgentMcpServer {
   type: "url";
@@ -19,13 +20,20 @@ export interface ManagedAgentMcpToolset {
   configs: { name: string; enabled: true; permission_policy: { type: "always_allow" | "always_ask" } }[];
 }
 
+/** Built-in tools (web, sandbox): only the planned ones are enabled. */
+export interface ManagedAgentBuiltinToolset {
+  type: "agent_toolset_20260401";
+  default_config: { enabled: false };
+  configs: { name: BuiltinTool; enabled: true; permission_policy: { type: "always_allow" | "always_ask" } }[];
+}
+
 export interface ManagedAgentParams {
   name: string;
   description: string;
   model: string;
   system: string;
   mcp_servers: ManagedAgentMcpServer[];
-  tools: ManagedAgentMcpToolset[];
+  tools: (ManagedAgentMcpToolset | ManagedAgentBuiltinToolset)[];
 }
 
 export interface ManagedAgentPlanParams {
@@ -60,7 +68,20 @@ function agentParams(agent: PlannedAgent, catalog: ToolCatalog): ManagedAgentPar
   }
 
   const mcp_servers: ManagedAgentMcpServer[] = [];
-  const tools: ManagedAgentMcpToolset[] = [];
+  const tools: ManagedAgentParams["tools"] = [];
+
+  const builtins = agent.builtinTools ?? [];
+  if (builtins.length > 0) {
+    tools.push({
+      type: "agent_toolset_20260401",
+      default_config: { enabled: false },
+      configs: builtins.map((t) => ({
+        name: t.tool,
+        enabled: true,
+        permission_policy: { type: t.permission === "ask" ? "always_ask" : "always_allow" },
+      })),
+    });
+  }
   for (const [serverName, serverTools] of byServer) {
     const server = catalog.find((s) => s.name === serverName);
     if (!server) continue; // validatePlan already dropped tools on unknown servers

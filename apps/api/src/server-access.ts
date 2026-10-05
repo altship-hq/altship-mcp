@@ -31,6 +31,8 @@ export interface AccessConfig {
   projectId: string;
   /** The altship user who owns the server. */
   ownerId: string;
+  /** Other altship users the owner has let sign in to a private server. */
+  memberIds: string[];
   /** SHA-256 hashes of the server's active access keys. */
   keyHashes: string[];
 }
@@ -39,7 +41,8 @@ export interface AccessConfig {
  * The env vars that decide who may call the server.
  *
  * - private:   the owner's access keys and altship's own key, plus the owner
- *              signing in with their altship account (OAuth).
+ *              and the people they've added signing in with their altship
+ *              accounts (OAuth).
  * - customers: anyone who signs in through the end-user sign-in server
  *              (src/end-users) with their own credential for the API. Their
  *              tokens are issued for this server's audience and carry that
@@ -52,7 +55,7 @@ export function accessEnv(config: AccessConfig): Record<string, string> {
       return {
         MCP_ACCESS_KEY_SHA256: [...config.keyHashes, hashAccessKey(internalAccessKey(config.projectId))].join(","),
         MCP_OAUTH_ISSUER: oauthIssuer(),
-        MCP_OAUTH_ALLOWED_SUBJECTS: config.ownerId,
+        MCP_OAUTH_ALLOWED_SUBJECTS: [config.ownerId, ...config.memberIds].join(","),
       };
     case "customers":
       return {

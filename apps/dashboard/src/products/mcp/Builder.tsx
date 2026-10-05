@@ -348,7 +348,7 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
                   <input type="radio" name="audience" checked={audience === "private"} onChange={() => setAudience("private")} />
                   <span>
                     <strong>Private</strong>
-                    <small>You and your team. Connect with access keys, or sign in with your altship account.</small>
+                    <small>You and people you invite. Connect with access keys, or sign in with your altship account.</small>
                   </span>
                 </label>
                 <label className={customersAvailable ? "option" : "option option-disabled"} aria-disabled={!customersAvailable}>
