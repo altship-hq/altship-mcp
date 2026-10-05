@@ -14,7 +14,7 @@ const NEW_SERVER = "mcp/new";
 const newServerButton = (
   <span className="head-actions">
     <Link className="btn ghost" to="mcp/memory/new">
-      + New memory store
+      + New memory
     </Link>
     <Link className="btn" to={NEW_SERVER}>
       + New MCP server
@@ -60,8 +60,8 @@ export default function McpProduct({ subpath }: { subpath: string }) {
     return (
       <>
         <PageHead
-          title="New memory store"
-          description="An MCP server that remembers: notes in collections that your chat apps and agents can search and add to. Nothing to import or deploy."
+          title="New memory"
+          description="An MCP server that remembers: notes by topic that your chat apps and agents can search and add to. Nothing to import or deploy."
         />
         <div className="builder">
           <NewMemoryStore onCreated={refreshDeployments} />

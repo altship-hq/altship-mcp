@@ -108,7 +108,18 @@ function median(values: number[]): number | null {
  * A table of tool calls, newest first: for one server (`deploymentId`) or all
  * of them. `summary` adds totals for the calls loaded so far.
  */
-export function ToolCallLog({ deploymentId, pageSize = 50, summary = false }: { deploymentId?: string; pageSize?: number; summary?: boolean }) {
+export function ToolCallLog({
+  deploymentId,
+  pageSize = 50,
+  summary = false,
+  generated = true,
+}: {
+  deploymentId?: string;
+  pageSize?: number;
+  summary?: boolean;
+  /** False for a server altship hosts itself (a memory), which has always recorded its calls. */
+  generated?: boolean;
+}) {
   const [calls, setCalls] = useState<ToolCall[] | null>(null);
   const [nextBefore, setNextBefore] = useState<string | null>(null);
   const [retentionDays, setRetentionDays] = useState<number | null>(null);
@@ -156,8 +167,8 @@ export function ToolCallLog({ deploymentId, pageSize = 50, summary = false }: { 
       ) : calls.length === 0 ? (
         <div className="empty">
           <p>
-            No tool calls{retentionDays ? ` in the last ${retentionDays} days` : " recorded yet"}. Servers deployed before call logging was added don't record calls; deploy the server again
-            to start.
+            No tool calls{retentionDays ? ` in the last ${retentionDays} days` : " recorded yet"}.
+            {generated && " Servers deployed before call logging was added don't record calls; deploy the server again to start."}
           </p>
         </div>
       ) : (

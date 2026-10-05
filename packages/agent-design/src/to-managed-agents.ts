@@ -76,6 +76,11 @@ function withWorkingNotes(agent: PlannedAgent): string {
           "Some of your tools need approval before they run. The platform shows the request and waits for a yes or no when you call one, so don't ask for permission in the conversation first. If you were asked to do the thing, call the tool; if it's declined, say so and stop.",
         ]
       : []),
+    ...(agent.tools.some((t) => t.tool.startsWith("memory."))
+      ? [
+          "You have a memory that outlasts this conversation. Search it when you start, so you build on what's already known. As you work, save what would help next time (what the user prefers, facts about them or their work, what you did and how it turned out) and update a note when something changes instead of adding a second one. When what you've learned fits no topic, create one. The memory should get more useful every time you run.",
+        ]
+      : []),
   ];
   return `${agent.instructions}\n\n## How you work\n${notes.map((n) => `- ${n}`).join("\n")}`;
 }

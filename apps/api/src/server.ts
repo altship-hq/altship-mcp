@@ -13,7 +13,8 @@ import {
   recordDeployment,
   listDeployments,
   getDeployment,
-  renameDeployment,
+  updateDeploymentDetails,
+  setCollections,
   canRecordUpgrades,
   markUpgraded,
   insertServerKey,
@@ -53,9 +54,9 @@ import { agentsRouter, agentsErrorHandler } from "./agents/router.js";
 import { endUsersRouter } from "./end-users/router.js";
 import { appsRouter, appsErrorHandler } from "./apps/router.js";
 import { memoryRouter } from "./memory/router.js";
-import { MemoryError, deleteRecord, listRecords, saveRecord, saveRecords, searchRecords, updateRecord } from "./memory/records.js";
+import { MemoryError, deleteCollection, deleteRecord, listRecords, renameCollection, saveRecord, saveRecords, searchRecords, updateRecord } from "./memory/records.js";
 import { MAX_IMPORT_NOTES, planImport } from "./memory/import.js";
-import { MEMORY_TEMPLATES, collectionsOf, deployedMemoryTools } from "./memory/tools.js";
+import { MAX_TOPICS, collectionsOf, deployedMemoryTools } from "./memory/tools.js";
 import { listConnections, revokeConnection } from "./end-users/store.js";
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "http://localhost:5173")
@@ -298,6 +299,7 @@ app.post("/api/deploy", async (req, res) => {
       connectSettings,
       kind: "api" as const,
       collections: null,
+      description: null,
     };
     await recordDeployment(record);
     if (accessKey) {
@@ -331,12 +333,29 @@ app.post("/api/deploy", async (req, res) => {
   }
 });
 
-// Renames a server. An empty name goes back to the spec's title.
+// Renames a server (an empty name goes back to the spec's title) and, for a memory, changes its description.
 app.patch("/api/deployments/:id", async (req, res) => {
-  if (typeof req.body?.name !== "string") return res.status(400).json({ error: "name must be a string." });
-  const deployment = await renameDeployment(String(req.params.id), userIdOf(req), serverName(req.body.name));
-  if (!deployment) return res.status(404).json({ error: "MCP server not found." });
-  res.json(deployment);
+  const { name, description } = (req.body ?? {}) as { name?: unknown; description?: unknown };
+  if (name !== undefined && typeof name !== "string") return res.status(400).json({ error: "name must be a string." });
+  if (description !== undefined && typeof description !== "string") return res.status(400).json({ error: "description must be a string." });
+  if (name === undefined && description === undefined) return res.status(400).json({ error: "Send a name or a description to change." });
+
+  const current = await getDeployment(String(req.params.id), userIdOf(req));
+  if (!current) return res.status(404).json({ error: "MCP server not found." });
+  try {
+    const deployment = await updateDeploymentDetails(current.id, current.userId, {
+      ...(typeof name === "string" ? { name: serverName(name) } : {}),
+      // Only a memory has a description of its own; an empty one clears it.
+      ...(typeof description === "string" && current.kind === "memory" ? { description: memoryDescription(description) || null } : {}),
+    });
+    res.json(deployment);
+  } catch (err) {
+    // The description column came later than the rest; say so plainly if it hasn't been added yet.
+    if (err instanceof Error && /'description' column/.test(err.message)) {
+      return res.status(500).json({ error: "Descriptions can't be saved yet: the database is missing a column. Run the latest supabase-schema.sql, then try again." });
+    }
+    throw err;
+  }
 });
 
 // Upgrades a server deployed with older generated code (before access checks
@@ -394,13 +413,16 @@ function memoryFailure(res: Response, err: unknown) {
   throw err;
 }
 
-// Creates a memory store: nothing to import or deploy, so it's ready at once.
+// Creates a memory store (name, what it's about, its topics): nothing to import or deploy, so it's ready at once.
 app.post("/api/memory", async (req, res) => {
   const base = process.env.API_PUBLIC_URL?.replace(/\/$/, "");
   if (!base) return res.status(500).json({ error: "Memory stores need API_PUBLIC_URL set, so they have an address." });
   const name = serverName(req.body?.name);
   if (!name) return res.status(400).json({ error: "Give the memory store a name." });
-  const template = typeof req.body?.template === "string" && Object.hasOwn(MEMORY_TEMPLATES, req.body.template) ? req.body.template : "blank";
+  const description = memoryDescription(req.body?.description);
+  // Topics the owner sets up front; more appear as notes are saved under new ones.
+  const given: unknown[] = Array.isArray(req.body?.topics) ? req.body.topics : [];
+  const topics = [...new Set(given.flatMap((t) => topicName(t) ?? []))].slice(0, MAX_TOPICS);
 
   const id = `mem_${randomBytes(12).toString("hex")}`;
   const tools = deployedMemoryTools();
@@ -420,7 +442,8 @@ app.post("/api/memory", async (req, res) => {
     authMode: "static" as const,
     connectSettings: null,
     kind: "memory" as const,
-    collections: MEMORY_TEMPLATES[template],
+    collections: topics.map((topic) => ({ name: topic, description: "" })),
+    description: description || null,
   };
   await recordDeployment(record);
   await insertServerKey({
@@ -440,6 +463,68 @@ app.post("/api/memory", async (req, res) => {
     accessKey,
     warnings: [],
   });
+});
+
+// ---- A memory's topics ----
+// A topic is the `collection` its notes carry, plus an entry (name and
+// description) in the memory's saved list. Topics that only exist because an
+// app or agent saved notes under them are handled the same as saved ones.
+
+/** A topic name as stored: one line, trimmed, capped. Null if nothing is left. */
+function topicName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  return value.replace(/\s+/g, " ").trim().slice(0, 60) || null;
+}
+
+function memoryDescription(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, 500) : "";
+}
+
+app.post("/api/memory/:id/topics", async (req, res) => {
+  const store = await ownMemoryStore(req, res);
+  if (!store) return;
+  const name = topicName(req.body?.name);
+  if (!name) return res.status(400).json({ error: "Give the topic a name." });
+  const topics = await collectionsOf(store);
+  if (topics.some((t) => t.name === name)) return res.status(400).json({ error: `"${name}" is already a topic.` });
+  if (topics.length >= MAX_TOPICS) return res.status(400).json({ error: `A memory can have up to ${MAX_TOPICS} topics.` });
+  await setCollections(store.id, store.userId, [...(store.collections ?? []), { name, description: memoryDescription(req.body?.description) }]);
+  res.status(201).json({ ok: true });
+});
+
+// Changes a topic's description and/or renames it; renaming moves its notes with it.
+app.patch("/api/memory/:id/topics", async (req, res) => {
+  const store = await ownMemoryStore(req, res);
+  if (!store) return;
+  const topic = typeof req.body?.topic === "string" ? req.body.topic : "";
+  const topics = await collectionsOf(store);
+  const current = topics.find((t) => t.name === topic);
+  if (!current) return res.status(404).json({ error: "Topic not found." });
+
+  const name = req.body?.name === undefined ? current.name : topicName(req.body.name);
+  if (!name) return res.status(400).json({ error: "A topic needs a name." });
+  // Two topics are never merged silently.
+  if (name !== current.name && topics.some((t) => t.name === name)) return res.status(400).json({ error: `"${name}" is already a topic.` });
+  const description = req.body?.description === undefined ? current.description : memoryDescription(req.body.description);
+
+  const moved = name !== current.name ? await renameCollection(store.id, current.name, name) : 0;
+  const saved = (store.collections ?? []).filter((t) => t.name !== current.name);
+  // Kept in its place in the list when it was already saved; added at the end when it only existed through notes.
+  const position = (store.collections ?? []).findIndex((t) => t.name === current.name);
+  saved.splice(position === -1 ? saved.length : position, 0, { name, description, ...(current.createdBy ? { createdBy: current.createdBy } : {}) });
+  await setCollections(store.id, store.userId, saved);
+  res.json({ name, description, moved });
+});
+
+// Deletes a topic and every note in it.
+app.delete("/api/memory/:id/topics", async (req, res) => {
+  const store = await ownMemoryStore(req, res);
+  if (!store) return;
+  const topic = typeof req.query.topic === "string" ? req.query.topic : "";
+  if (!(await collectionsOf(store)).some((t) => t.name === topic)) return res.status(404).json({ error: "Topic not found." });
+  const deleted = await deleteCollection(store.id, topic);
+  await setCollections(store.id, store.userId, (store.collections ?? []).filter((t) => t.name !== topic));
+  res.json({ deleted });
 });
 
 // A store's collections and notes, for the dashboard. `q` searches; `collection` narrows.
@@ -493,7 +578,13 @@ app.post("/api/memory/:id/import/preview", async (req, res) => {
   if (!store) return;
   if (typeof req.body?.text !== "string") return res.status(400).json({ error: "Send the text to import." });
   try {
-    res.json(await planImport(req.body.text, { collection: typeof req.body.collection === "string" ? req.body.collection : undefined, existing: await collectionsOf(store) }));
+    res.json(
+      await planImport(req.body.text, {
+        collection: typeof req.body.collection === "string" ? req.body.collection : undefined,
+        fixedCollection: req.body.fixed === true,
+        existing: await collectionsOf(store),
+      }),
+    );
   } catch (err) {
     memoryFailure(res, err);
   }

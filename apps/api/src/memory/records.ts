@@ -18,6 +18,8 @@ export interface MemoryRecord {
   title: string;
   body: string;
   tags: string[];
+  /** Its owner in the dashboard, or an app or agent over MCP. */
+  createdBy: "user" | "agent";
   createdAt: string;
   updatedAt: string;
 }
@@ -28,15 +30,26 @@ interface Row {
   title: string;
   body: string;
   tags: string[];
+  created_by?: "user" | "agent" | null;
   created_at: string;
   updated_at: string;
 }
 
-const COLUMNS = "id,collection,title,body,tags,created_at,updated_at";
+// Every column, so a database without the newer `created_by` one still reads (the search vector is never sent on).
+const COLUMNS = "*";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function fromRow(row: Row): MemoryRecord {
-  return { id: row.id, collection: row.collection, title: row.title, body: row.body, tags: row.tags, createdAt: row.created_at, updatedAt: row.updated_at };
+  return {
+    id: row.id,
+    collection: row.collection,
+    title: row.title,
+    body: row.body,
+    tags: row.tags,
+    createdBy: row.created_by === "agent" ? "agent" : "user",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }
 
 /** A collection name as stored: trimmed, one line. */
@@ -55,17 +68,20 @@ function checkText(title: string | undefined, body: string | undefined) {
   if (body !== undefined && body.length > MAX_BODY) throw new MemoryError(`A note's text can be at most ${MAX_BODY} characters. Split it into several notes.`);
 }
 
-export async function saveRecord(storeId: string, input: { collection: string; title: string; body?: string; tags?: string[] }): Promise<MemoryRecord> {
+export async function saveRecord(
+  storeId: string,
+  input: { collection: string; title: string; body?: string; tags?: string[]; createdBy?: "user" | "agent" },
+): Promise<MemoryRecord> {
   checkText(input.title, input.body);
   const { count, error: countError } = await getSupabase().from("memory_records").select("id", { count: "exact", head: true }).eq("deployment_id", storeId);
   if (countError) throw new Error(`Failed to save note: ${countError.message}`);
   if ((count ?? 0) >= MAX_RECORDS_PER_STORE) throw new MemoryError(`This store is full (${MAX_RECORDS_PER_STORE} notes). Delete some before saving more.`);
 
-  const { data, error } = await getSupabase()
-    .from("memory_records")
-    .insert({ deployment_id: storeId, collection: collectionName(input.collection), title: input.title.trim(), body: input.body ?? "", tags: cleanTags(input.tags) })
-    .select(COLUMNS)
-    .single();
+  const row = { deployment_id: storeId, collection: collectionName(input.collection), title: input.title.trim(), body: input.body ?? "", tags: cleanTags(input.tags) };
+  const insert = (values: Record<string, unknown>) => getSupabase().from("memory_records").insert(values).select(COLUMNS).single();
+  let { data, error } = await insert(input.createdBy === "agent" ? { ...row, created_by: "agent" } : row);
+  // That column was added later; a database without it still saves the note.
+  if (error && /created_by/.test(error.message)) ({ data, error } = await insert(row));
   if (error) throw new Error(`Failed to save note: ${error.message}`);
   return fromRow(data as Row);
 }
@@ -123,6 +139,25 @@ export async function deleteRecord(storeId: string, id: string): Promise<boolean
   const { data, error } = await getSupabase().from("memory_records").delete().eq("deployment_id", storeId).eq("id", id).select("id");
   if (error) throw new Error(`Failed to delete note: ${error.message}`);
   return (data ?? []).length > 0;
+}
+
+/** Moves every note in one collection to another name. Returns how many moved. */
+export async function renameCollection(storeId: string, from: string, to: string): Promise<number> {
+  const { data, error } = await getSupabase()
+    .from("memory_records")
+    .update({ collection: collectionName(to), updated_at: new Date().toISOString() })
+    .eq("deployment_id", storeId)
+    .eq("collection", from)
+    .select("id");
+  if (error) throw new Error(`Failed to rename topic: ${error.message}`);
+  return (data ?? []).length;
+}
+
+/** Deletes every note in a collection. Returns how many were deleted. */
+export async function deleteCollection(storeId: string, name: string): Promise<number> {
+  const { data, error } = await getSupabase().from("memory_records").delete().eq("deployment_id", storeId).eq("collection", name).select("id");
+  if (error) throw new Error(`Failed to delete topic: ${error.message}`);
+  return (data ?? []).length;
 }
 
 /** The store's notes, most recently changed first, optionally from one collection. */

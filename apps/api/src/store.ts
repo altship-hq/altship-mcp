@@ -21,6 +21,13 @@ export interface ConnectSettings {
   helpText: string | null;
 }
 
+/** A memory's topic. `createdBy: "agent"` marks one an app or agent added while using the memory. */
+export interface MemoryTopic {
+  name: string;
+  description: string;
+  createdBy?: "agent";
+}
+
 export interface DeploymentRecord {
   id: string;
   userId: string;
@@ -42,8 +49,10 @@ export interface DeploymentRecord {
   connectSettings: ConnectSettings | null;
   /** "api": generated from an OpenAPI spec and hosted as its own project. "memory": a notes store altship serves itself. */
   kind: "api" | "memory";
-  /** A memory store's starter collections; null for other kinds. */
-  collections: { name: string; description: string }[] | null;
+  /** A memory store's topics as its owner set them up (notes call their topic a "collection"); null for other kinds. */
+  collections: MemoryTopic[] | null;
+  /** What a memory store is about, in its owner's words; null if they didn't say, and for other kinds. */
+  description: string | null;
   /** The hosting deployment holding the server's current code: `id`, until an in-place upgrade. */
   sourceDeploymentId: string;
   /** Runs older generated code than today's (e.g. without call logging) and can be upgraded in place. */
@@ -67,7 +76,8 @@ interface DeploymentRow {
   generator_version?: number | null;
   source_deployment_id?: string | null;
   kind?: "api" | "memory" | null;
-  collections?: { name: string; description: string }[] | null;
+  collections?: MemoryTopic[] | null;
+  description?: string | null;
 }
 
 function fromRow(row: DeploymentRow): DeploymentRecord {
@@ -87,6 +97,7 @@ function fromRow(row: DeploymentRow): DeploymentRecord {
     connectSettings: row.connect_settings ?? null,
     kind: row.kind ?? "api",
     collections: row.collections ?? null,
+    description: row.description ?? null,
     sourceDeploymentId: row.source_deployment_id || row.id,
     // Only generated servers carry code that can fall behind.
     needsUpgrade: (row.kind ?? "api") === "api" && (row.generator_version ?? 0) < GENERATOR_VERSION,
@@ -123,8 +134,10 @@ export async function recordDeployment(record: Omit<DeploymentRecord, "createdAt
       // Columns added with memory stores; left out for other servers so a database without them still records those.
       ...(record.kind === "memory" ? { kind: record.kind, collections: record.collections } : {}),
   };
-  let { error } = await getSupabase().from("deployments").insert({ ...row, generator_version: GENERATOR_VERSION });
-  // That column was added later; a database without it still records the server.
+  const description = record.description ? { description: record.description } : {};
+  let { error } = await getSupabase().from("deployments").insert({ ...row, ...description, generator_version: GENERATOR_VERSION });
+  // Those columns were added later; a database without one still records the server.
+  if (error && /description/.test(error.message)) ({ error } = await getSupabase().from("deployments").insert({ ...row, generator_version: GENERATOR_VERSION }));
   if (error && /generator_version/.test(error.message)) ({ error } = await getSupabase().from("deployments").insert(row));
 
   if (error) throw new Error(`Failed to record deployment: ${error.message}`);
@@ -155,17 +168,34 @@ export async function getDeployment(id: string, userId: string): Promise<Deploym
   return data ? fromRow(data as DeploymentRow) : null;
 }
 
-/** Renames the user's deployment; null goes back to the spec's title. Returns null if it isn't theirs. */
-export async function renameDeployment(id: string, userId: string, name: string | null): Promise<DeploymentRecord | null> {
+/**
+ * Changes the user's deployment's name and/or (for a memory) its description.
+ * A null name goes back to the spec's title; a null description clears it.
+ * Returns null if the deployment isn't theirs.
+ */
+export async function updateDeploymentDetails(
+  id: string,
+  userId: string,
+  details: { name?: string | null; description?: string | null },
+): Promise<DeploymentRecord | null> {
   const { data, error } = await getSupabase()
     .from("deployments")
-    .update({ name })
+    .update({
+      ...(details.name !== undefined ? { name: details.name } : {}),
+      ...(details.description !== undefined ? { description: details.description } : {}),
+    })
     .eq("id", id)
     .eq("user_id", userId)
     .select("*")
     .maybeSingle();
-  if (error) throw new Error(`Failed to rename MCP server: ${error.message}`);
+  if (error) throw new Error(`Failed to update MCP server: ${error.message}`);
   return data ? fromRow(data as DeploymentRow) : null;
+}
+
+/** Replaces the saved list of a memory's topics (their names and descriptions). */
+export async function setCollections(id: string, userId: string, collections: MemoryTopic[]): Promise<void> {
+  const { error } = await getSupabase().from("deployments").update({ collections }).eq("id", id).eq("user_id", userId);
+  if (error) throw new Error(`Failed to save topics: ${error.message}`);
 }
 
 /** The "for your customers" server whose MCP endpoint is `mcpUrl` (served at <deployment url>/api/mcp). */

@@ -8,7 +8,7 @@ import {
   listMembers,
   mcpUrl,
   removeMember,
-  renameDeployment,
+  updateDeploymentDetails,
   revokeAccessKey,
   revokeConnection,
   type AccessKey,
@@ -270,7 +270,7 @@ function People({ deployment }: { deployment: DeploymentRecord }) {
   }
 
   async function remove(member: Member) {
-    if (!window.confirm(`Remove ${member.email}? They'll lose access within about a minute.`)) return;
+    if (!window.confirm(`Remove ${member.email}? They'll lose access ${deployment.kind === "memory" ? "immediately" : "within about a minute"}.`)) return;
     setBusy(true);
     setError(null);
     try {
@@ -298,8 +298,10 @@ function People({ deployment }: { deployment: DeploymentRecord }) {
       </div>
       <p className="section-copy">
         Invite someone by email so they can connect from claude.ai, ChatGPT and other chat apps by signing in as themselves. They
-        accept with an altship account for that address, creating one if they need to. They use this server's API credential,
-        and they don't see the server in their own dashboard.
+        accept with an altship account for that address, creating one if they need to.{" "}
+        {deployment.kind === "memory"
+          ? "They can read and change its notes, and they don't see it in their own dashboard."
+          : "They use this server's API credential, and they don't see the server in their own dashboard."}
       </p>
       {error && <div className="notice">{error}</div>}
       {changed && <p className="section-copy">Updating the server with your changes…</p>}
@@ -425,12 +427,16 @@ function UpgradeNotice({ deployment, onUpdated }: { deployment: DeploymentRecord
 function ServerHead({ deployment, onUpdated }: { deployment: DeploymentRecord; onUpdated?: (updated: DeploymentRecord) => void }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(deployment.name);
+  const [about, setAbout] = useState(deployment.description ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const description = `${deployment.toolNames.length} tools · ${deployment.projectName}`;
+  const isMemory = deployment.kind === "memory";
+  // A memory says what it's about; other servers show their tool count and slug.
+  const description = deployment.kind === "memory" && deployment.description ? deployment.description : `${deployment.toolNames.length} tools · ${deployment.projectName}`;
 
   function start() {
     setName(deployment.name);
+    setAbout(deployment.description ?? "");
     setError(null);
     setEditing(true);
   }
@@ -440,7 +446,7 @@ function ServerHead({ deployment, onUpdated }: { deployment: DeploymentRecord; o
     setBusy(true);
     setError(null);
     try {
-      onUpdated?.(await renameDeployment(deployment.id, name));
+      onUpdated?.(await updateDeploymentDetails(deployment.id, isMemory ? { name, description: about } : { name }));
       setEditing(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -455,7 +461,7 @@ function ServerHead({ deployment, onUpdated }: { deployment: DeploymentRecord; o
         description={description}
         action={
           <button type="button" className="btn" onClick={start}>
-            Rename
+            {isMemory ? "Edit" : "Rename"}
           </button>
         }
       />
@@ -466,25 +472,40 @@ function ServerHead({ deployment, onUpdated }: { deployment: DeploymentRecord; o
     <div className="page-head">
       <div className="rename">
         {error && <div className="notice">{error}</div>}
-        <form className="key-form" onSubmit={save}>
+        <form className={isMemory ? "key-form details-form" : "key-form"} onSubmit={save}>
           <input
             type="text"
-            aria-label="Server name"
-            placeholder={deployment.apiTitle}
+            aria-label={isMemory ? "Title" : "Server name"}
+            placeholder={isMemory ? "Title" : deployment.apiTitle}
             value={name}
             maxLength={80}
             autoFocus
             onChange={(e) => setName(e.target.value)}
             disabled={busy}
           />
-          <button type="submit" className="btn" disabled={busy}>
+          {isMemory && (
+            <input
+              type="text"
+              aria-label="Description"
+              placeholder="Description: what this memory is about"
+              value={about}
+              maxLength={500}
+              onChange={(e) => setAbout(e.target.value)}
+              disabled={busy}
+            />
+          )}
+          <button type="submit" className="btn" disabled={busy || (isMemory && !name.trim())}>
             {busy ? "Saving…" : "Save"}
           </button>
           <button type="button" className="copy-button" disabled={busy} onClick={() => setEditing(false)}>
             Cancel
           </button>
         </form>
-        <p>Leave it empty to use the spec's title, {deployment.apiTitle}.</p>
+        <p>
+          {isMemory
+            ? "The description is told to the apps and agents that use this memory, so they know when to look here."
+            : `Leave it empty to use the spec's title, ${deployment.apiTitle}.`}
+        </p>
       </div>
     </div>
   );
@@ -551,7 +572,7 @@ export function ServerPage({
             <Link to="observability">All tool calls →</Link>
           </div>
           <UpgradeNotice deployment={deployment} onUpdated={onUpdated} />
-          <ToolCallLog deploymentId={deployment.id} pageSize={10} />
+          <ToolCallLog deploymentId={deployment.id} pageSize={10} generated={deployment.kind !== "memory"} />
         </section>
       </>
     );
@@ -574,7 +595,7 @@ export function ServerPage({
   }
 
   async function revoke(key: AccessKey) {
-    if (!window.confirm(`Revoke "${key.name}"? Clients using it will stop working within about a minute.`)) return;
+    if (!window.confirm(`Revoke "${key.name}"? Clients using it will stop working ${deployment!.kind === "memory" ? "immediately" : "within about a minute"}.`)) return;
     setBusy(true);
     setError(null);
     try {
@@ -618,10 +639,10 @@ export function ServerPage({
           <h2>Access keys</h2>
         </div>
         <p className="section-copy">
-          Give each client its own key so you can revoke one without affecting the rest. Changes take about a minute to apply
-          while the server updates.
+          Give each client its own key so you can revoke one without affecting the rest.{" "}
+          {deployment.kind === "memory" ? "Changes apply immediately." : "Changes take about a minute to apply while the server updates."}
         </p>
-        {changed && <p className="section-copy">Updating the server with your key changes…</p>}
+        {changed && deployment.kind !== "memory" && <p className="section-copy">Updating the server with your key changes…</p>}
         {created && <NewKeyNotice accessKey={created} />}
 
         {keys === null ? (
@@ -685,7 +706,7 @@ export function ServerPage({
           <Link to="observability">All tool calls →</Link>
         </div>
         <UpgradeNotice deployment={deployment} onUpdated={onUpdated} />
-        <ToolCallLog deploymentId={deployment.id} pageSize={10} />
+        <ToolCallLog deploymentId={deployment.id} pageSize={10} generated={deployment.kind !== "memory"} />
       </section>
     </>
   );

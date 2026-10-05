@@ -2,6 +2,7 @@ import { PlaygroundSession } from "@altship/playground";
 import type { AgentPlan, CatalogServer, CatalogTool, ToolCatalog } from "@altship/agent-design";
 import { listDeployments, type DeploymentRecord } from "../store.js";
 import { internalAccessKey } from "../access-keys.js";
+import { deployedMemoryTools } from "../memory/tools.js";
 import { AppsConfigError, ensureAgentSession, relayToken, relayUrl, sessionMcp } from "../apps/composio.js";
 
 export interface CatalogEntry extends CatalogServer {
@@ -93,7 +94,8 @@ export async function loadCatalog(userId: string): Promise<{ servers: CatalogEnt
           name: d.projectName,
           title: d.name,
           url: mcpEndpoint(d),
-          tools: d.tools?.map(toCatalogTool) ?? (await listLiveTools(d)),
+          // A memory's tools are altship's own, so they're read from the code, not from what was stored when it was created.
+          tools: d.kind === "memory" ? deployedMemoryTools().map(toCatalogTool) : (d.tools?.map(toCatalogTool) ?? (await listLiveTools(d))),
         });
       } catch (err) {
         unavailable.push({

@@ -39,7 +39,7 @@ export const PRODUCTS: Product[] = [
       { path: "", label: "Overview" },
       { path: "servers", label: "MCP servers" },
       { path: "new", label: "New server" },
-      { path: "memory/new", label: "New memory store" },
+      { path: "memory/new", label: "New memory" },
     ],
     dynamicPage: (subpath) => (/^servers\/[^/]+$/.test(subpath) ? { path: subpath, label: "Server" } : null),
   },

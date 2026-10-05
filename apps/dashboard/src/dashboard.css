@@ -1218,6 +1218,151 @@
   color: #cfcfcf;
 }
 
+.dash .note-chip-add {
+  border-style: dashed;
+}
+
+.dash .note-chip:disabled {
+  color: #9a9a9a;
+  cursor: default;
+}
+
+/* Marks on topics and notes an app or agent added */
+.dash .agent-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: #1d4f91;
+  border: 1px solid #b9cbe6;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+.dash .agent-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  vertical-align: middle;
+  background: #1d4f91;
+  border-radius: 50%;
+}
+
+.dash .note-chip.is-on .agent-dot {
+  background: #9fc0ef;
+}
+
+/* A dialog that asks before something that can't be undone */
+.dash .modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(17, 17, 17, 0.45);
+}
+
+.dash .modal {
+  width: 100%;
+  max-width: 440px;
+  padding: 24px;
+  background: #fff;
+  border: 1px solid #111;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+
+.dash .modal h2 {
+  margin: 0 0 10px;
+  font-size: 17px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.dash .modal-body p {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #444;
+}
+
+.dash .modal-body strong {
+  font-weight: 500;
+  color: #111;
+}
+
+.dash .modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.dash .modal-actions button {
+  padding: 9px 14px;
+  font: inherit;
+  font-size: 12px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.dash .modal-cancel {
+  color: #111;
+  background: #fff;
+  border: 1px solid #cfcfcf;
+}
+
+.dash .modal-danger {
+  color: #fff;
+  background: #a3231f;
+  border: 1px solid #a3231f;
+}
+
+.dash .modal-actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* The selected topic: what it's for, with edit and delete */
+.dash .topic-bar {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #595959;
+  background: #fafafa;
+  border: 1px solid var(--line);
+}
+
+.dash .topic-bar span {
+  margin-right: auto;
+}
+
+.dash .topic-bar strong {
+  font-weight: 500;
+  color: #111;
+}
+
+.dash .topic-form .log-actions .hint {
+  align-self: center;
+}
+
+/* Editing a memory's title and description in place of the page heading */
+.dash .page-head .rename .details-form {
+  flex-wrap: wrap;
+  max-width: 760px;
+}
+
+.dash .page-head .rename .details-form input {
+  flex: 1 1 100%;
+}
+
 .dash .note-search {
   flex: 1;
   min-width: 160px;
@@ -1336,22 +1481,85 @@
   resize: vertical;
 }
 
-.dash .import-file {
+/* A real button for picking a file (the browser's own control stays hidden) */
+.dash .upload-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
-  font-size: 12px;
-  color: #595959;
 }
 
-.dash .import-file input,
-.dash .builder .import-file input {
-  width: auto;
-  max-width: 260px;
+.dash .upload-button,
+.dash .builder button.upload-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   margin: 0;
-  padding: 0;
-  border: 0;
+  padding: 8px 12px;
+  font: inherit;
   font-size: 12px;
+  color: #111;
+  background: #fff;
+  border: 1px solid #cfcfcf;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.dash .upload-button:hover:not(:disabled),
+.dash .builder button.upload-button:hover:not(:disabled) {
+  border-color: #111;
+}
+
+.dash .upload-button:disabled {
+  color: #9a9a9a;
+  cursor: default;
+}
+
+.dash .upload-note {
+  font-size: 12px;
+  color: #777;
+}
+
+/* A topic being written on the new-memory form */
+.dash .topic-draft {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 14px;
+  border: 1px solid #e0e0e0;
+}
+
+.dash .topic-draft-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dash .builder .topic-draft-head input {
+  flex: 1;
+  max-width: 420px;
+  margin: 0;
+  font-weight: 500;
+}
+
+.dash .builder .topic-draft .link-danger {
+  margin: 0 0 0 auto;
+  padding: 0;
+  font-size: 12px;
+  color: #a3231f;
+  background: none;
+  border: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.dash .builder .memory-form .action-bar {
+  margin-top: 28px;
+}
+
+.dash .builder .memory-form .credential-field input {
+  max-width: 640px;
 }
 
 .dash .import-panel {

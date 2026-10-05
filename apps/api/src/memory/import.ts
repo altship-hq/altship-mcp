@@ -200,7 +200,15 @@ async function organiseWithAi(text: string, collections: { name: string; descrip
  * Works out the notes a document becomes. `collection` is where notes go when
  * the document doesn't say (its headings, or the AI, may name others).
  */
-export async function planImport(text: string, options: { collection?: string; existing?: { name: string; description: string }[] } = {}): Promise<ImportPlan> {
+export async function planImport(
+  text: string,
+  options: {
+    collection?: string;
+    /** Put every note in `collection`, whatever the document's headings or the AI would have chosen (text written under a topic). */
+    fixedCollection?: boolean;
+    existing?: { name: string; description: string }[];
+  } = {},
+): Promise<ImportPlan> {
   const source = text.trim();
   if (!source) throw new MemoryError("There's no text to import.");
   if (source.length > MAX_IMPORT_CHARS) throw new MemoryError(`That's too long to import at once (${MAX_IMPORT_CHARS.toLocaleString()} characters at most). Split it and import the parts.`);
@@ -217,6 +225,7 @@ export async function planImport(text: string, options: { collection?: string; e
 
   const notes = plan.notes
     .filter((n) => n && typeof n.title === "string" && typeof n.body === "string" && typeof n.collection === "string")
+    .map((n) => (options.fixedCollection ? { ...n, collection: fallback } : n))
     .map((n) => ({ ...n, tags: Array.isArray(n.tags) ? n.tags.filter((t): t is string => typeof t === "string") : [] }))
     .flatMap(clean);
   if (notes.length === 0) throw new MemoryError("Nothing in that text could be turned into a note.");

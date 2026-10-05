@@ -61,13 +61,17 @@ export interface DeploymentRecord {
   needsUpgrade: boolean;
   /** "memory": a notes store altship hosts itself; "api" (or missing): generated from an OpenAPI spec. */
   kind?: "api" | "memory";
-  /** A memory store's starter collections. */
+  /** A memory's topics as its owner set them up. */
   collections?: MemoryCollection[] | null;
+  /** What a memory is about, in its owner's words. */
+  description?: string | null;
 }
 
 export interface MemoryCollection {
   name: string;
   description: string;
+  /** Set on a topic an app or agent added while using the memory. */
+  createdBy?: "agent";
 }
 
 /** A note in a memory store. */
@@ -77,13 +81,15 @@ export interface MemoryRecord {
   title: string;
   body: string;
   tags: string[];
+  /** "agent" when an app or agent saved it over MCP; "user" when it was written or imported in the dashboard. */
+  createdBy?: "user" | "agent";
   createdAt: string;
   updatedAt: string;
 }
 
 /** Creates a memory store; like a deploy, the response carries its first access key, shown once. */
-export function createMemoryStore(name: string, template: string): Promise<DeployResponse> {
-  return postJson<DeployResponse>("/api/memory", { name, template });
+export function createMemoryStore(memory: { name: string; description: string; topics: string[] }): Promise<DeployResponse> {
+  return postJson<DeployResponse>("/api/memory", memory);
 }
 
 /** A store's collections (with note counts) and its notes; `q` searches, `collection` narrows. */
@@ -115,8 +121,12 @@ export interface MemoryImportPlan {
 }
 
 /** Works out the notes a document would become, without saving anything. */
-export function previewMemoryImport(storeId: string, text: string, collection?: string): Promise<MemoryImportPlan> {
-  return postJson(`/api/memory/${storeId}/import/preview`, { text, ...(collection ? { collection } : {}) });
+/**
+ * Works out the notes a document would become, without saving anything.
+ * `topic` is where notes go when the text doesn't say; with `fixed`, every note goes there.
+ */
+export function previewMemoryImport(storeId: string, text: string, topic?: string, fixed = false): Promise<MemoryImportPlan> {
+  return postJson(`/api/memory/${storeId}/import/preview`, { text, ...(topic ? { collection: topic } : {}), ...(fixed ? { fixed: true } : {}) });
 }
 
 /** Saves the notes from a preview. */
@@ -193,9 +203,23 @@ export function listDeployments(): Promise<DeploymentRecord[]> {
   return getJson<DeploymentRecord[]>("/api/deployments");
 }
 
-/** Renames a server; an empty name goes back to the spec's title. */
-export function renameDeployment(deploymentId: string, name: string): Promise<DeploymentRecord> {
-  return patchJson<DeploymentRecord>(`/api/deployments/${deploymentId}`, { name });
+/** Renames a server (an empty name goes back to the spec's title) and, for a memory, sets its description. */
+export function updateDeploymentDetails(deploymentId: string, details: { name?: string; description?: string }): Promise<DeploymentRecord> {
+  return patchJson<DeploymentRecord>(`/api/deployments/${deploymentId}`, details);
+}
+
+export function addMemoryTopic(storeId: string, name: string, description: string): Promise<{ ok: true }> {
+  return postJson(`/api/memory/${storeId}/topics`, { name, description });
+}
+
+/** Renames a topic (its notes move with it) and/or changes its description. */
+export function updateMemoryTopic(storeId: string, topic: string, changes: { name?: string; description?: string }): Promise<{ name: string; description: string; moved: number }> {
+  return patchJson(`/api/memory/${storeId}/topics`, { topic, ...changes });
+}
+
+/** Deletes a topic and every note in it. */
+export function deleteMemoryTopic(storeId: string, topic: string): Promise<{ deleted: number }> {
+  return deleteJson(`/api/memory/${storeId}/topics?topic=${encodeURIComponent(topic)}`);
 }
 
 /** Brings a server deployed with older code up to date in place (same URL, keys and people). Takes about a minute. */
