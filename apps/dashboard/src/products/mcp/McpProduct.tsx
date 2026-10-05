@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import Builder from "./Builder.js";
 import { ServerPage } from "./Access.js";
+import { NewMemoryStore } from "./Memory.js";
 import { listDeployments, type DeploymentRecord } from "./api.js";
 import { Link } from "../../router.js";
 import { PageHead, Stat } from "../../ui.js";
@@ -11,9 +12,14 @@ import { PageHead, Stat } from "../../ui.js";
 const NEW_SERVER = "mcp/new";
 
 const newServerButton = (
-  <Link className="btn" to={NEW_SERVER}>
-    + New MCP server
-  </Link>
+  <span className="head-actions">
+    <Link className="btn ghost" to="mcp/memory/new">
+      + New memory store
+    </Link>
+    <Link className="btn" to={NEW_SERVER}>
+      + New MCP server
+    </Link>
+  </span>
 );
 
 export default function McpProduct({ subpath }: { subpath: string }) {
@@ -45,6 +51,20 @@ export default function McpProduct({ subpath }: { subpath: string }) {
         />
         <div className="builder">
           <Builder onDeployed={refreshDeployments} />
+        </div>
+      </>
+    );
+  }
+
+  if (subpath === "memory/new") {
+    return (
+      <>
+        <PageHead
+          title="New memory store"
+          description="An MCP server that remembers: notes in collections that your chat apps and agents can search and add to. Nothing to import or deploy."
+        />
+        <div className="builder">
+          <NewMemoryStore onCreated={refreshDeployments} />
         </div>
       </>
     );
@@ -152,7 +172,10 @@ function ServerTable({ deployments, loading }: { deployments: DeploymentRecord[]
                 <Link to={`mcp/servers/${d.id}`}>
                   <strong>{d.name}</strong>
                 </Link>
-                <small>{d.projectName}</small>
+                <small>
+                  {d.kind === "memory" && <span className="soon-tag kind-tag">Memory</span>}
+                  {d.projectName}
+                </small>
               </td>
               <td title={d.toolNames.join(", ")}>{d.toolNames.length}</td>
               <td>

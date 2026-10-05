@@ -59,6 +59,73 @@ export interface DeploymentRecord {
   connectSettings: { displayName: string; credentialKind: string; helpText: string | null } | null;
   /** Runs older generated code than today's (e.g. without call logging) and can be upgraded in place. */
   needsUpgrade: boolean;
+  /** "memory": a notes store altship hosts itself; "api" (or missing): generated from an OpenAPI spec. */
+  kind?: "api" | "memory";
+  /** A memory store's starter collections. */
+  collections?: MemoryCollection[] | null;
+}
+
+export interface MemoryCollection {
+  name: string;
+  description: string;
+}
+
+/** A note in a memory store. */
+export interface MemoryRecord {
+  id: string;
+  collection: string;
+  title: string;
+  body: string;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Creates a memory store; like a deploy, the response carries its first access key, shown once. */
+export function createMemoryStore(name: string, template: string): Promise<DeployResponse> {
+  return postJson<DeployResponse>("/api/memory", { name, template });
+}
+
+/** A store's collections (with note counts) and its notes; `q` searches, `collection` narrows. */
+export function listMemoryRecords(
+  storeId: string,
+  options: { collection?: string; q?: string } = {},
+): Promise<{ collections: Array<MemoryCollection & { notes: number }>; records: MemoryRecord[] }> {
+  const params = new URLSearchParams();
+  if (options.collection) params.set("collection", options.collection);
+  if (options.q) params.set("q", options.q);
+  const query = params.toString();
+  return getJson(`/api/memory/${storeId}/records${query ? `?${query}` : ""}`);
+}
+
+export type NoteInput = { collection: string; title: string; body: string; tags: string[] };
+
+export function saveMemoryRecord(storeId: string, note: NoteInput): Promise<MemoryRecord> {
+  return postJson(`/api/memory/${storeId}/records`, note);
+}
+
+export function updateMemoryRecord(storeId: string, recordId: string, note: Partial<NoteInput>): Promise<MemoryRecord> {
+  return patchJson(`/api/memory/${storeId}/records/${recordId}`, note);
+}
+
+/** How a document was turned into notes: along its headings, organised by AI, or by paragraph. */
+export interface MemoryImportPlan {
+  notes: NoteInput[];
+  method: "headings" | "ai" | "paragraphs";
+}
+
+/** Works out the notes a document would become, without saving anything. */
+export function previewMemoryImport(storeId: string, text: string, collection?: string): Promise<MemoryImportPlan> {
+  return postJson(`/api/memory/${storeId}/import/preview`, { text, ...(collection ? { collection } : {}) });
+}
+
+/** Saves the notes from a preview. */
+export function importMemoryNotes(storeId: string, notes: NoteInput[]): Promise<{ saved: number }> {
+  return postJson(`/api/memory/${storeId}/import`, { notes });
+}
+
+export function deleteMemoryRecord(storeId: string, recordId: string): Promise<{ ok: true }> {
+  return deleteJson(`/api/memory/${storeId}/records/${recordId}`);
 }
 
 /** Someone who connected to a server offered to customers. */

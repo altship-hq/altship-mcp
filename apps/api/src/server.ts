@@ -52,6 +52,10 @@ import { runRetention } from "./retention.js";
 import { agentsRouter, agentsErrorHandler } from "./agents/router.js";
 import { endUsersRouter } from "./end-users/router.js";
 import { appsRouter, appsErrorHandler } from "./apps/router.js";
+import { memoryRouter } from "./memory/router.js";
+import { MemoryError, deleteRecord, listRecords, saveRecord, saveRecords, searchRecords, updateRecord } from "./memory/records.js";
+import { MAX_IMPORT_NOTES, planImport } from "./memory/import.js";
+import { MEMORY_TEMPLATES, collectionsOf, deployedMemoryTools } from "./memory/tools.js";
 import { listConnections, revokeConnection } from "./end-users/store.js";
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "http://localhost:5173")
@@ -78,6 +82,8 @@ app.use(express.urlencoded({ extended: false }));
 // The end-user sign-in server (public, its own CORS) comes before the
 // dashboard API's origin-restricted CORS.
 app.use(endUsersRouter);
+// Memory stores are MCP servers this API serves itself, called by MCP clients from anywhere.
+app.use(memoryRouter);
 app.use(cors({ origin: allowedOrigins }));
 
 app.get("/api/health", (_req, res) => {
@@ -113,7 +119,7 @@ app.use("/api/agents", agentsRouter, agentsErrorHandler);
 app.use("/api/apps", appsRouter, appsErrorHandler);
 
 // Everything else is the MCP Creator dashboard API: signed-in users only.
-app.use(["/api/tools", "/api/generate", "/api/deployments", "/api/deploy", "/api/invites", "/api/logs"], requireAuth);
+app.use(["/api/tools", "/api/generate", "/api/deployments", "/api/deploy", "/api/invites", "/api/logs", "/api/memory"], requireAuth);
 
 app.post("/api/tools", async (req, res) => {
   const spec = specInput(req.body);
@@ -290,6 +296,8 @@ app.post("/api/deploy", async (req, res) => {
       })),
       authMode: forCustomers ? ("static" as const) : authMode,
       connectSettings,
+      kind: "api" as const,
+      collections: null,
     };
     await recordDeployment(record);
     if (accessKey) {
@@ -369,6 +377,153 @@ app.post("/api/deployments/:id/upgrade", async (req, res) => {
     res.status(500).json({ error: err instanceof Error ? err.message : "Upgrade failed." });
   }
 });
+
+// ---- Memory stores (notes an LLM or agent can search and write, served over MCP) ----
+
+/** The user's memory store with that id; answers 404 and returns null if there isn't one. */
+async function ownMemoryStore(req: Request, res: Response): Promise<DeploymentRecord | null> {
+  const store = await getDeployment(String(req.params.id), userIdOf(req));
+  if (store?.kind === "memory") return store;
+  res.status(404).json({ error: "Memory store not found." });
+  return null;
+}
+
+/** Answers 400 for a mistake the user can fix (a note too long, a full store); rethrows anything else. */
+function memoryFailure(res: Response, err: unknown) {
+  if (err instanceof MemoryError) return res.status(400).json({ error: err.message });
+  throw err;
+}
+
+// Creates a memory store: nothing to import or deploy, so it's ready at once.
+app.post("/api/memory", async (req, res) => {
+  const base = process.env.API_PUBLIC_URL?.replace(/\/$/, "");
+  if (!base) return res.status(500).json({ error: "Memory stores need API_PUBLIC_URL set, so they have an address." });
+  const name = serverName(req.body?.name);
+  if (!name) return res.status(400).json({ error: "Give the memory store a name." });
+  const template = typeof req.body?.template === "string" && Object.hasOwn(MEMORY_TEMPLATES, req.body.template) ? req.body.template : "blank";
+
+  const id = `mem_${randomBytes(12).toString("hex")}`;
+  const tools = deployedMemoryTools();
+  const accessKey = generateAccessKey();
+  const record = {
+    id,
+    userId: userIdOf(req),
+    audience: "private" as const,
+    name,
+    apiTitle: name,
+    toolNames: tools.map((t) => t.name),
+    projectName: `${envSlug(name).toLowerCase().replace(/_/g, "-") || "memory"}-${id.slice(4, 12)}`,
+    // No hosting project: the id stands in, and altship's own key for the store is derived from it.
+    projectId: id,
+    url: `${base}/memory/${id}`,
+    tools,
+    authMode: "static" as const,
+    connectSettings: null,
+    kind: "memory" as const,
+    collections: MEMORY_TEMPLATES[template],
+  };
+  await recordDeployment(record);
+  await insertServerKey({
+    id: newKeyId(),
+    deploymentId: id,
+    userId: record.userId,
+    name: "Default",
+    prefix: displayPrefix(accessKey),
+    keyHash: hashAccessKey(accessKey),
+  });
+  res.status(201).json({
+    ...record,
+    sourceDeploymentId: id,
+    needsUpgrade: false,
+    createdAt: new Date().toISOString(),
+    mcpUrl: mcpEndpoint(record.url),
+    accessKey,
+    warnings: [],
+  });
+});
+
+// A store's collections and notes, for the dashboard. `q` searches; `collection` narrows.
+app.get("/api/memory/:id/records", async (req, res) => {
+  const store = await ownMemoryStore(req, res);
+  if (!store) return;
+  const collection = typeof req.query.collection === "string" && req.query.collection ? req.query.collection : undefined;
+  const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  const [collections, records] = await Promise.all([
+    collectionsOf(store),
+    q ? searchRecords(store.id, q, { collection, limit: 50 }) : listRecords(store.id, { collection, limit: 100 }),
+  ]);
+  res.json({ collections, records });
+});
+
+app.post("/api/memory/:id/records", async (req, res) => {
+  const store = await ownMemoryStore(req, res);
+  if (!store) return;
+  const { collection, title, body, tags } = noteFields(req.body);
+  if (collection === undefined || title === undefined) return res.status(400).json({ error: "A note needs a collection and a title." });
+  try {
+    res.status(201).json(await saveRecord(store.id, { collection, title, body, tags }));
+  } catch (err) {
+    memoryFailure(res, err);
+  }
+});
+
+app.patch("/api/memory/:id/records/:recordId", async (req, res) => {
+  const store = await ownMemoryStore(req, res);
+  if (!store) return;
+  try {
+    const updated = await updateRecord(store.id, String(req.params.recordId), noteFields(req.body));
+    if (!updated) return res.status(404).json({ error: "Note not found." });
+    res.json(updated);
+  } catch (err) {
+    memoryFailure(res, err);
+  }
+});
+
+app.delete("/api/memory/:id/records/:recordId", async (req, res) => {
+  const store = await ownMemoryStore(req, res);
+  if (!store) return;
+  if (!(await deleteRecord(store.id, String(req.params.recordId)))) return res.status(404).json({ error: "Note not found." });
+  res.json({ ok: true });
+});
+
+// Works out the notes a document (Markdown, an essay, a few paragraphs) would
+// become, without saving anything, so the user can look before adding them.
+app.post("/api/memory/:id/import/preview", async (req, res) => {
+  const store = await ownMemoryStore(req, res);
+  if (!store) return;
+  if (typeof req.body?.text !== "string") return res.status(400).json({ error: "Send the text to import." });
+  try {
+    res.json(await planImport(req.body.text, { collection: typeof req.body.collection === "string" ? req.body.collection : undefined, existing: await collectionsOf(store) }));
+  } catch (err) {
+    memoryFailure(res, err);
+  }
+});
+
+// Saves the notes from a preview (as shown, or with some removed).
+app.post("/api/memory/:id/import", async (req, res) => {
+  const store = await ownMemoryStore(req, res);
+  if (!store) return;
+  const notes = (Array.isArray(req.body?.notes) ? req.body.notes : []).map(noteFields);
+  if (notes.length === 0 || notes.length > MAX_IMPORT_NOTES || notes.some((n: ReturnType<typeof noteFields>) => n.collection === undefined || n.title === undefined)) {
+    return res.status(400).json({ error: `Send 1 to ${MAX_IMPORT_NOTES} notes, each with a collection and a title.` });
+  }
+  try {
+    res.status(201).json({ saved: await saveRecords(store.id, notes as { collection: string; title: string; body?: string; tags?: string[] }[]) });
+  } catch (err) {
+    memoryFailure(res, err);
+  }
+});
+
+/** A note's fields from a request body: only the ones present and of the right type. */
+function noteFields(body: unknown): { collection?: string; title?: string; body?: string; tags?: string[] } {
+  const input = (body ?? {}) as Record<string, unknown>;
+  return {
+    ...(typeof input.collection === "string" ? { collection: input.collection } : {}),
+    ...(typeof input.title === "string" ? { title: input.title } : {}),
+    ...(typeof input.body === "string" ? { body: input.body } : {}),
+    ...(Array.isArray(input.tags) ? { tags: input.tags.filter((t): t is string => typeof t === "string") } : {}),
+  };
+}
 
 // ---- Access keys ----------------------------------------------------------
 
@@ -628,6 +783,8 @@ function newInviteId(): string {
 
 /** Pushes the deployment's current access settings (keys and people) to its env and redeploys so they take effect. */
 async function syncAccessKeys(deployment: DeploymentRecord) {
+  // A memory store checks keys and people against the database on every request: nothing to push.
+  if (deployment.kind === "memory") return;
   await applyAccessEnv({
     audience: deployment.audience,
     projectId: deployment.projectId,

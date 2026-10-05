@@ -1167,6 +1167,215 @@
   font-size: 13px;
 }
 
+/* Two actions side by side in a page heading */
+.dash .head-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.dash .btn.ghost {
+  color: #111;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px #cfcfcf;
+}
+
+.dash .soon-tag.kind-tag {
+  display: inline-block;
+  margin: 0 6px 0 0;
+}
+
+/* Memory store notes */
+.dash .note-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.dash .note-chip {
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: #333;
+  background: #fff;
+  border: 1px solid #d4d4d4;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.dash .note-chip span {
+  color: #8a8a8a;
+}
+
+.dash .note-chip.is-on {
+  color: #fff;
+  background: #111;
+  border-color: #111;
+}
+
+.dash .note-chip.is-on span {
+  color: #cfcfcf;
+}
+
+.dash .note-search {
+  flex: 1;
+  min-width: 160px;
+  margin-left: auto;
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid #d4d4d4;
+  border-radius: 2px;
+}
+
+.dash .note-filters button.btn {
+  border: 0;
+  cursor: pointer;
+}
+
+.dash .note-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+}
+
+.dash .note-list > li + li {
+  border-top: 1px solid var(--line);
+}
+
+.dash .note {
+  padding: 12px 14px;
+}
+
+.dash .note-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.dash .note-head strong {
+  font-weight: 500;
+}
+
+.dash .note-meta {
+  margin-right: auto;
+  font-size: 12px;
+  color: #777;
+}
+
+.dash .note-body {
+  margin: 6px 0 0;
+  max-width: 760px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #444;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dash .note-tags {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: #777;
+}
+
+.dash .note-editor {
+  display: grid;
+  gap: 8px;
+  max-width: 760px;
+  margin: 0 0 14px;
+  padding: 14px;
+  border: 1px solid #111;
+}
+
+.dash .note-list .note-editor {
+  margin: 0;
+  border: 0;
+}
+
+.dash .note-editor-row {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.dash .note-editor input,
+.dash .note-editor textarea {
+  width: 100%;
+  padding: 9px 12px;
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid #d4d4d4;
+  border-radius: 2px;
+}
+
+.dash .note-editor textarea {
+  line-height: 1.55;
+  resize: vertical;
+}
+
+/* Importing a document into a memory store */
+.dash .import-source {
+  display: grid;
+  gap: 8px;
+}
+
+.dash .import-source textarea,
+.dash .builder .import-source textarea {
+  width: 100%;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  border: 1px solid #d4d4d4;
+  border-radius: 2px;
+  resize: vertical;
+}
+
+.dash .import-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: #595959;
+}
+
+.dash .import-file input,
+.dash .builder .import-file input {
+  width: auto;
+  max-width: 260px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: 12px;
+}
+
+.dash .import-panel {
+  max-width: none;
+}
+
+.dash .import-preview {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.dash .import-panel .log-actions .hint {
+  align-self: center;
+}
+
+.dash .note-editor .log-actions {
+  margin-top: 2px;
+}
+
+.dash .note-editor button.btn {
+  border: 0;
+  cursor: pointer;
+}
+
 /* Renaming a server, in place of the page heading */
 .dash .page-head .rename {
   flex: 1;

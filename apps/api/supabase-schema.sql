@@ -276,3 +276,63 @@ create table if not exists app_sessions (
 );
 
 alter table app_sessions enable row level security;
+
+-- ---- Memory stores -------------------------------------------------------------
+-- An MCP server altship serves itself (apps/api/src/memory): notes in
+-- collections that an LLM, or an agent, can search and write. A store is a
+-- `deployments` row with kind 'memory', so access keys, people, renaming and
+-- call logs all work for it as they do for a server generated from an API.
+alter table deployments add column if not exists kind text not null default 'api' check (kind in ('api', 'memory'));
+-- A memory store's starter collections: [{ "name": ..., "description": ... }].
+alter table deployments add column if not exists collections jsonb;
+
+-- array_to_string isn't marked immutable, which a generated column requires.
+create or replace function memory_tags_text(tags text[])
+returns text
+language sql
+immutable
+set search_path = ''
+as $$ select array_to_string(tags, ' ') $$;
+
+create table if not exists memory_records (
+  id uuid primary key default gen_random_uuid(),
+  deployment_id text not null references deployments(id) on delete cascade,
+  collection text not null,
+  title text not null,
+  body text not null default '',
+  tags text[] not null default '{}',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  -- What keyword search matches: the title counts most, then tags, then the text.
+  search tsvector generated always as (
+    setweight(to_tsvector('english', title), 'A') ||
+    setweight(to_tsvector('english', memory_tags_text(tags)), 'B') ||
+    setweight(to_tsvector('english', body), 'C')
+  ) stored
+);
+
+create index if not exists memory_records_store_idx on memory_records (deployment_id, collection, updated_at desc);
+create index if not exists memory_records_search_idx on memory_records using gin (search);
+
+alter table memory_records enable row level security;
+
+-- Keyword search within one store, best matches first. Words are matched as
+-- typed ("quoted phrases" and -exclusions work); a plain substring of the
+-- title also counts, so short or unusual words still find things.
+create or replace function search_memory_records(p_deployment_id text, p_query text, p_collection text default null, p_limit integer default 20)
+returns setof memory_records
+language sql
+stable
+set search_path = public
+as $$
+  select r.*
+  from memory_records r
+  where r.deployment_id = p_deployment_id
+    and (p_collection is null or r.collection = p_collection)
+    and (r.search @@ websearch_to_tsquery('english', p_query) or r.title ilike '%' || replace(replace(p_query, '%', ''), '_', '') || '%')
+  order by ts_rank(r.search, websearch_to_tsquery('english', p_query)) desc, r.updated_at desc
+  limit least(greatest(p_limit, 1), 50);
+$$;
+
+revoke execute on function search_memory_records(text, text, text, integer) from public, anon, authenticated;
+grant execute on function search_memory_records(text, text, text, integer) to service_role;

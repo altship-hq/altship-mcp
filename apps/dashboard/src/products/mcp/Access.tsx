@@ -21,6 +21,7 @@ import {
 import { Link } from "../../router.js";
 import { PageHead } from "../../ui.js";
 import { ToolCallLog } from "../observability/ObservabilityProduct.js";
+import { MemoryNotes } from "./Memory.js";
 
 // How clients connect to a managed MCP server. Private servers: endpoint,
 // access keys (shown in full once, when created) and OAuth sign-in for chat
@@ -607,6 +608,8 @@ export function ServerPage({
         <h2>Connect</h2>
         <ConnectPanel deployment={deployment} />
       </section>
+
+      {deployment.kind === "memory" && <MemoryNotes deployment={deployment} />}
 
       {deployment.authMode !== "passthrough" && <People deployment={deployment} />}
 

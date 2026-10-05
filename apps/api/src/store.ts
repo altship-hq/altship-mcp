@@ -40,6 +40,10 @@ export interface DeploymentRecord {
   authMode: "static" | "passthrough" | null;
   /** Only for audience "customers". */
   connectSettings: ConnectSettings | null;
+  /** "api": generated from an OpenAPI spec and hosted as its own project. "memory": a notes store altship serves itself. */
+  kind: "api" | "memory";
+  /** A memory store's starter collections; null for other kinds. */
+  collections: { name: string; description: string }[] | null;
   /** The hosting deployment holding the server's current code: `id`, until an in-place upgrade. */
   sourceDeploymentId: string;
   /** Runs older generated code than today's (e.g. without call logging) and can be upgraded in place. */
@@ -62,6 +66,8 @@ interface DeploymentRow {
   connect_settings: ConnectSettings | null;
   generator_version?: number | null;
   source_deployment_id?: string | null;
+  kind?: "api" | "memory" | null;
+  collections?: { name: string; description: string }[] | null;
 }
 
 function fromRow(row: DeploymentRow): DeploymentRecord {
@@ -79,8 +85,11 @@ function fromRow(row: DeploymentRow): DeploymentRecord {
     tools: row.tools ?? null,
     authMode: row.auth_mode ?? null,
     connectSettings: row.connect_settings ?? null,
+    kind: row.kind ?? "api",
+    collections: row.collections ?? null,
     sourceDeploymentId: row.source_deployment_id || row.id,
-    needsUpgrade: (row.generator_version ?? 0) < GENERATOR_VERSION,
+    // Only generated servers carry code that can fall behind.
+    needsUpgrade: (row.kind ?? "api") === "api" && (row.generator_version ?? 0) < GENERATOR_VERSION,
   };
 }
 
@@ -111,6 +120,8 @@ export async function recordDeployment(record: Omit<DeploymentRecord, "createdAt
       tools: record.tools,
       auth_mode: record.authMode,
       connect_settings: record.connectSettings,
+      // Columns added with memory stores; left out for other servers so a database without them still records those.
+      ...(record.kind === "memory" ? { kind: record.kind, collections: record.collections } : {}),
   };
   let { error } = await getSupabase().from("deployments").insert({ ...row, generator_version: GENERATOR_VERSION });
   // That column was added later; a database without it still records the server.

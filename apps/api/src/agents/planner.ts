@@ -29,6 +29,7 @@ Rules:
 - Prefer a single agent (flow "single", role "solo"). Use a team (flow "team": one "coordinator" plus "specialist"s) only when the work splits into distinct responsibilities that benefit from separate instructions or tools. The coordinator delegates to specialists by name and description, so describe each specialist's strengths clearly.
 - Models: "claude-opus-5" for the solo agent or coordinator; "claude-sonnet-5" for specialists that need judgment; "claude-haiku-4-5" for simple lookup or reading-heavy specialists.
 - Instructions are each agent's system prompt: say what it does, how to use its tools, when to stop and ask, and how to format answers. Be concrete and brief.
+- A tool with permission "ask" is paused by the platform until the user approves that call. Don't also tell the agent to confirm with the user before using it: that makes them approve the same action twice. Reserve "stop and ask" instructions for things the agent can't know, such as a missing recipient.
 - Assumptions: list anything you had to assume that the user should confirm (limits, tone, what counts as done). Keep it short; leave empty if nothing is unclear.
 - testPrompts: 3 to 5 realistic messages a user would send, including at least one edge case.
 - Agent keys are short lowercase slugs; names are short and human-readable, unique within the plan, and never "self".`;

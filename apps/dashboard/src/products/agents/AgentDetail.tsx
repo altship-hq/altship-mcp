@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "../../router.js";
 import { PageHead } from "../../ui.js";
 import FlowEditor from "./FlowEditor.js";
+import Markdown from "./Markdown.js";
 import {
   confirmPlaygroundTool,
   endpointUrl,
@@ -164,10 +165,16 @@ function Playground({ agent }: { agent: AgentRecord }) {
         </div>
       ) : (
         <div className="transcript">
-          {transcript.map((item) => (
-            <TranscriptItem key={item.id} item={item} agentName={agent.name} onDecide={decide} />
+          {toTurns(transcript).map((turn, i, turns) => (
+            <Turn
+              key={turn.id}
+              turn={turn}
+              // Only the latest turn can still be in progress.
+              live={working && !awaitingApproval && i === turns.length - 1}
+              agentName={agent.name}
+              onDecide={decide}
+            />
           ))}
-          {working && !awaitingApproval && <div className="working">Working…</div>}
           <div ref={bottom} />
         </div>
       )}
@@ -211,12 +218,13 @@ function Playground({ agent }: { agent: AgentRecord }) {
 }
 
 type TranscriptEntry =
-  | { kind: "user" | "agent"; id: string; text: string }
-  | { kind: "delegation"; id: string; direction: "sent" | "received"; agent: string; text: string }
-  | { kind: "error"; id: string; text: string }
+  | { kind: "user" | "agent"; id: string; at: string | null; text: string }
+  | { kind: "delegation"; id: string; at: string | null; direction: "sent" | "received"; agent: string; text: string }
+  | { kind: "error"; id: string; at: string | null; text: string }
   | {
       kind: "tool";
       id: string;
+      at: string | null;
       server: string;
       tool: string;
       input: Record<string, unknown>;
@@ -243,16 +251,16 @@ function useTranscript(events: AgentUiEvent[]): TranscriptEntry[] {
     for (const e of events) {
       switch (e.kind) {
         case "user":
-          entries.push({ kind: "user", id: e.id, text: e.text });
+          entries.push({ kind: "user", id: e.id, at: e.at, text: e.text });
           break;
         case "message":
-          if (e.text) entries.push({ kind: "agent", id: e.id, text: e.text });
+          if (e.text) entries.push({ kind: "agent", id: e.id, at: e.at, text: e.text });
           break;
         case "delegation":
-          entries.push({ kind: "delegation", id: e.id, direction: e.direction, agent: e.agent, text: e.text });
+          entries.push({ kind: "delegation", id: e.id, at: e.at, direction: e.direction, agent: e.agent, text: e.text });
           break;
         case "error":
-          entries.push({ kind: "error", id: e.id, text: e.message });
+          entries.push({ kind: "error", id: e.id, at: e.at, text: e.message });
           break;
         case "tool_call": {
           const result = results.get(e.id);
@@ -262,6 +270,7 @@ function useTranscript(events: AgentUiEvent[]): TranscriptEntry[] {
           entries.push({
             kind: "tool",
             id: e.id,
+            at: result?.at ?? e.at,
             server: e.server,
             tool: e.tool,
             input: e.input,
@@ -277,6 +286,103 @@ function useTranscript(events: AgentUiEvent[]): TranscriptEntry[] {
     }
     return entries;
   }, [events]);
+}
+
+type TranscriptMessage = Extract<TranscriptEntry, { kind: "user" | "agent" }>;
+
+/** One exchange: what the user asked, what the agent did about it, and its answer. */
+interface TranscriptTurn {
+  id: string;
+  user: TranscriptMessage | null;
+  items: TranscriptEntry[];
+}
+
+function toTurns(entries: TranscriptEntry[]): TranscriptTurn[] {
+  const turns: TranscriptTurn[] = [];
+  for (const entry of entries) {
+    if (entry.kind === "user") turns.push({ id: entry.id, user: entry, items: [] });
+    else if (turns.length === 0) turns.push({ id: entry.id, user: null, items: [entry] });
+    else turns[turns.length - 1].items.push(entry);
+  }
+  return turns;
+}
+
+/**
+ * A turn as a conversation, not a log: the agent's answer is the bubble, and
+ * the work that led to it (its notes to itself along the way, tool calls,
+ * delegations) is folded into one "worked through N steps" line that opens
+ * on demand. Tool calls waiting for approval and errors always stay visible.
+ */
+function Turn({
+  turn,
+  live,
+  agentName,
+  onDecide,
+}: {
+  turn: TranscriptTurn;
+  live: boolean;
+  agentName: string;
+  onDecide: (toolCallId: string, result: "allow" | "deny") => void;
+}) {
+  // The answer is the agent's last message once nothing else follows it. While
+  // the agent is still working, a trailing message is just its latest note.
+  const last = turn.items[turn.items.length - 1];
+  const answer: TranscriptMessage | null = !live && last?.kind === "agent" ? last : null;
+  const pending = turn.items.filter((item) => item.kind === "tool" && item.pending);
+  const errors = turn.items.filter((item) => item.kind === "error");
+  const steps = turn.items.filter((item) => item !== answer && item.kind !== "error" && !(item.kind === "tool" && item.pending));
+
+  const latest = steps[steps.length - 1];
+  const doing = !latest ? "Thinking…" : latest.kind === "tool" ? `Using ${latest.tool}…` : latest.kind === "agent" ? latest.text.split("\n")[0] : "Working…";
+  const startedAt = turn.user?.at ?? turn.items[0]?.at;
+  const endedAt = (answer ?? last)?.at;
+  const took = startedAt && endedAt ? new Date(endedAt).getTime() - new Date(startedAt).getTime() : null;
+
+  return (
+    <>
+      {turn.user && <div className="bubble user">{turn.user.text}</div>}
+
+      {(steps.length > 0 || live) && (
+        <details className={live ? "steps is-live" : "steps"}>
+          <summary>
+            {live ? (
+              <span className="working">{doing}</span>
+            ) : (
+              <>
+                Worked through {steps.length} step{steps.length === 1 ? "" : "s"}
+                {took !== null && took > 0 && ` in ${formatDuration(took)}`}
+              </>
+            )}
+          </summary>
+          <div className="steps-body">
+            {steps.map((item) =>
+              item.kind === "agent" ? (
+                <p key={item.id} className="step-note">
+                  {item.text}
+                </p>
+              ) : (
+                <TranscriptItem key={item.id} item={item} agentName={agentName} onDecide={onDecide} />
+              ),
+            )}
+          </div>
+        </details>
+      )}
+
+      {pending.map((item) => (
+        <TranscriptItem key={item.id} item={item} agentName={agentName} onDecide={onDecide} />
+      ))}
+      {errors.map((item) => (
+        <TranscriptItem key={item.id} item={item} agentName={agentName} onDecide={onDecide} />
+      ))}
+
+      {answer && (
+        <div className="bubble agent">
+          <span className="bubble-author">{agentName}</span>
+          <Markdown text={answer.text} />
+        </div>
+      )}
+    </>
+  );
 }
 
 function TranscriptItem({

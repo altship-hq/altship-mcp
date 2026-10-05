@@ -405,6 +405,111 @@
   color: #777;
 }
 
+/* An agent's answer, written in Markdown */
+.dash .bubble.agent:has(.markdown) {
+  white-space: normal;
+}
+
+.dash .markdown > :first-child {
+  margin-top: 0;
+}
+
+.dash .markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.dash .markdown p,
+.dash .markdown ul,
+.dash .markdown ol,
+.dash .markdown pre {
+  margin: 0 0 10px;
+}
+
+.dash .markdown h3,
+.dash .markdown h4 {
+  margin: 16px 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.dash .markdown h4 {
+  font-size: 13px;
+}
+
+.dash .markdown ul,
+.dash .markdown ol {
+  padding-left: 20px;
+}
+
+.dash .markdown li + li {
+  margin-top: 3px;
+}
+
+.dash .markdown hr {
+  margin: 14px 0;
+  border: 0;
+  border-top: 1px solid #dcdcdc;
+}
+
+.dash .markdown a {
+  color: #111;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.dash .markdown code,
+.dash .markdown pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: #e9e9e9;
+}
+
+.dash .markdown code {
+  padding: 1px 4px;
+}
+
+.dash .markdown pre {
+  padding: 10px 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+/* The work behind an answer, folded into one line */
+.dash .steps {
+  align-self: stretch;
+  font-size: 12px;
+  color: #595959;
+}
+
+.dash .steps > summary {
+  width: fit-content;
+  max-width: 100%;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash .steps > summary:hover {
+  color: #111;
+}
+
+.dash .steps-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding-left: 12px;
+  border-left: 2px solid #e4e4e4;
+}
+
+.dash .step-note {
+  margin: 0;
+  line-height: 1.5;
+  color: #595959;
+  white-space: pre-wrap;
+}
+
 .dash .working {
   font-size: 12px;
   color: #595959;
@@ -737,7 +842,7 @@
 
 .dash .flow-editor {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 330px;
+  grid-template-columns: minmax(0, 1fr) 400px;
   gap: 12px;
   align-items: start;
   margin-bottom: 8px;
@@ -874,6 +979,38 @@
 .dash .flow-inspector .agent-card {
   padding: 0;
   border: 0;
+}
+
+/* A step's tools in the side panel: the panel is narrow, so each tool stacks
+   (name, why, then where it's from and its permission) instead of sitting in columns. */
+.dash .builder .flow-inspector .plan-tool-row {
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 6px 8px;
+  padding: 10px;
+}
+
+.dash .builder .flow-inspector .plan-tool-row .tool-side {
+  grid-column: 2;
+  justify-content: space-between;
+}
+
+.dash .builder .flow-inspector .tool-name {
+  overflow-wrap: anywhere;
+}
+
+.dash .builder .flow-inspector .tool-server {
+  max-width: none;
+  min-width: 0;
+}
+
+.dash .builder .flow-inspector .tool-side select {
+  flex: none;
+  width: auto;
+  margin: 0;
+}
+
+.dash .builder .flow-inspector .add-tool {
+  width: 100%;
 }
 
 .dash .flow-route-list > span {

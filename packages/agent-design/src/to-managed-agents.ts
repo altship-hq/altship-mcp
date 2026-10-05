@@ -61,6 +61,25 @@ export function coordinatorRoster(specialistIds: { id: string; version: number }
   };
 }
 
+/**
+ * The agent's instructions plus how it should work with whoever it's talking
+ * to, which every agent needs and plans shouldn't have to restate. Tools set
+ * to "ask" are paused for approval by the platform, so an agent that also
+ * asks in the conversation makes the user confirm the same thing twice.
+ */
+function withWorkingNotes(agent: PlannedAgent): string {
+  const asks = [...agent.tools, ...(agent.builtinTools ?? [])].some((t) => t.permission === "ask");
+  const notes = [
+    "Do the work before you reply: use your tools as far as they'll take you, then answer once with the result. Skip running commentary on each step; whoever you're working for sees your tool calls already. Stop to ask only for something you can't find out or decide yourself.",
+    ...(asks
+      ? [
+          "Some of your tools need approval before they run. The platform shows the request and waits for a yes or no when you call one, so don't ask for permission in the conversation first. If you were asked to do the thing, call the tool; if it's declined, say so and stop.",
+        ]
+      : []),
+  ];
+  return `${agent.instructions}\n\n## How you work\n${notes.map((n) => `- ${n}`).join("\n")}`;
+}
+
 function agentParams(agent: PlannedAgent, catalog: ToolCatalog): ManagedAgentParams {
   const byServer = new Map<string, PlannedAgent["tools"]>();
   for (const tool of agent.tools) {
@@ -102,7 +121,7 @@ function agentParams(agent: PlannedAgent, catalog: ToolCatalog): ManagedAgentPar
     name: agent.name,
     description: agent.description || agent.name,
     model: agent.model,
-    system: agent.instructions,
+    system: withWorkingNotes(agent),
     mcp_servers,
     tools,
   };
