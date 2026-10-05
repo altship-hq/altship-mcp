@@ -259,3 +259,20 @@ create table if not exists accounts (
 );
 
 alter table accounts enable row level security;
+
+-- ---- Connected apps ------------------------------------------------------------
+-- Sessions with the app provider (Composio; apps/api/src/apps/composio.ts). A
+-- user has one for browsing and signing in to apps (toolkits_key '*') and one
+-- per set of apps their agents use. Only ids are kept: no credentials and no
+-- provider addresses.
+create table if not exists app_sessions (
+  id text primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  toolkits text[] not null default '{}',
+  -- The sorted toolkit slugs joined by commas, or '*' for the browse session.
+  toolkits_key text not null,
+  created_at timestamptz not null default now(),
+  unique (user_id, toolkits_key)
+);
+
+alter table app_sessions enable row level security;

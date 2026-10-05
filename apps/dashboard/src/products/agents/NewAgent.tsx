@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, navigate } from "../../router.js";
 import { PageHead } from "../../ui.js";
+import AppsPicker from "./AppsPicker.js";
 import FlowEditor from "./FlowEditor.js";
 import { useHistory } from "./useHistory.js";
 import {
   approvePlan,
   blankPlan,
   getCatalog,
+  isAppsServer,
   planToolCount,
   proposePlan,
   withFlow,
@@ -53,6 +55,8 @@ export default function NewAgent() {
   const [useWeb, setUseWeb] = useState(true);
   const [useSandbox, setUseSandbox] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(() => new Set(focusDeploymentId ? [focusDeploymentId] : []));
+  // Connected apps (Gmail, Slack, ...) ticked for this agent, by slug.
+  const [pickedApps, setPickedApps] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     getCatalog()
@@ -64,12 +68,13 @@ export default function NewAgent() {
     () => ({
       serverDeploymentIds: (catalog?.servers ?? []).filter((s) => picked.has(s.deploymentId)).map((s) => s.deploymentId),
       builtinTools: [...(useWeb ? BUILTIN_GROUPS.web : []), ...(useSandbox ? BUILTIN_GROUPS.sandbox : [])],
+      appToolkits: [...pickedApps].sort(),
     }),
-    [catalog, picked, useWeb, useSandbox],
+    [catalog, picked, pickedApps, useWeb, useSandbox],
   );
   // Only the servers chosen for this agent can appear in its plan.
   const servers = useMemo(
-    () => new Map((catalog?.servers ?? []).filter((s) => picked.has(s.deploymentId)).map((s) => [s.name, s])),
+    () => new Map((catalog?.servers ?? []).filter((s) => picked.has(s.deploymentId) || isAppsServer(s)).map((s) => [s.name, s])),
     [catalog, picked],
   );
 
@@ -85,6 +90,9 @@ export default function NewAgent() {
         // The planner works from the agents; the flow is laid out again from its answer.
         ...(revise && plan ? { previousPlan: { ...plan, flowGraph: undefined }, feedback: feedback.trim() } : {}),
       });
+      // The plan may use the ticked apps' tools, which come back as one more server.
+      const appsServer = result.catalog.find(isAppsServer);
+      setCatalog((current) => current && { ...current, servers: [...current.servers.filter((x) => !isAppsServer(x)), ...(appsServer ? [appsServer] : [])] });
       // A first proposal starts the history; a re-plan is a step you can undo.
       if (revise && plan) history.set(withFlow(result.plan));
       else history.reset(withFlow(result.plan));
@@ -133,6 +141,15 @@ export default function NewAgent() {
           />
 
           <ToolPicker
+            pickedApps={pickedApps}
+            onToggleApp={(slug, on) =>
+              setPickedApps((current) => {
+                const next = new Set(current);
+                if (on) next.add(slug);
+                else next.delete(slug);
+                return next;
+              })
+            }
             catalog={catalog}
             useWeb={useWeb}
             useSandbox={useSandbox}
@@ -160,9 +177,15 @@ export default function NewAgent() {
             <button
               className="secondary"
               disabled={busy !== null || !name.trim()}
-              onClick={() => {
+              onClick={async () => {
                 setError(null);
-                history.reset(blankPlan(name.trim(), description.trim()));
+                try {
+                  // The tools of the ticked apps have to be in the catalog before steps can use them.
+                  if (toolChoice.appToolkits.length > 0) setCatalog(await getCatalog(toolChoice.appToolkits));
+                  history.reset(blankPlan(name.trim(), description.trim()));
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : String(err));
+                }
               }}
             >
               Build the flow myself
@@ -288,6 +311,8 @@ function sameKindOfEdit(previous: AgentPlan | null, next: AgentPlan | null): boo
 
 /** Which tools the agent may use: built-in ones (no MCP server needed) and any of your MCP servers. */
 function ToolPicker({
+  pickedApps,
+  onToggleApp,
   catalog,
   useWeb,
   useSandbox,
@@ -296,6 +321,8 @@ function ToolPicker({
   onSandbox,
   onToggleServer,
 }: {
+  pickedApps: Set<string>;
+  onToggleApp: (slug: string, on: boolean) => void;
   catalog: Catalog | null;
   useWeb: boolean;
   useSandbox: boolean;
@@ -304,6 +331,8 @@ function ToolPicker({
   onSandbox: (on: boolean) => void;
   onToggleServer: (deploymentId: string) => void;
 }) {
+  // The connected-apps server joins the catalog once apps are ticked; it has its own picker below.
+  const ownServers = (catalog?.servers ?? []).filter((s) => !isAppsServer(s));
   return (
     <fieldset className="tool-picker">
       <legend>Tools it can use</legend>
@@ -329,7 +358,7 @@ function ToolPicker({
       <div className="tool-picker-label">Your MCP servers</div>
       {!catalog ? (
         <p className="hint">Loading your MCP servers…</p>
-      ) : catalog.servers.length === 0 ? (
+      ) : ownServers.length === 0 ? (
         <p className="hint">
           None yet. Agents don't need one;{" "}
           <Link to="mcp/new" className="inline-link">
@@ -339,7 +368,7 @@ function ToolPicker({
         </p>
       ) : (
         <div className="tool-picker-group">
-          {catalog.servers.map((s) => (
+          {ownServers.map((s) => (
             <label key={s.deploymentId} className="tool-choice">
               <input type="checkbox" checked={picked.has(s.deploymentId)} onChange={() => onToggleServer(s.deploymentId)} />
               <span>
@@ -355,6 +384,8 @@ function ToolPicker({
       {catalog && catalog.unavailable.length > 0 && (
         <p className="hint">Can't be used by agents: {catalog.unavailable.map((u) => `${u.title} (${u.reason})`).join("; ")}</p>
       )}
+
+      <AppsPicker picked={pickedApps} onToggle={onToggleApp} />
     </fieldset>
   );
 }
@@ -501,7 +532,13 @@ function AgentCard({
             onChange({
               tools: [
                 ...agent.tools,
-                { server: pick.server.name, tool: pick.tool.name, permission: pick.tool.destructive ? "ask" : "auto", reason: "Added by you." },
+                {
+                  server: pick.server.name,
+                  tool: pick.tool.name,
+                  // Actions in someone's own apps wait for approval unless the tool only reads.
+                  permission: pick.tool.destructive || (isAppsServer(pick.server) && pick.tool.sensitive) ? "ask" : "auto",
+                  reason: "Added by you.",
+                },
               ],
             });
           }}

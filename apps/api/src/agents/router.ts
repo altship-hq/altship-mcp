@@ -4,7 +4,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { BUILTIN_TOOLS, PlanError, compileFlow, validatePlan, type AgentPlan, type BuiltinTool } from "@altship/agent-design";
 import { AgentConfigError } from "./anthropic.js";
 import { PLANS, planOf, retentionCutoff } from "../plans.js";
-import { loadCatalog, serversUsedBy, toToolCatalog, type CatalogEntry } from "./catalog.js";
+import { appsCatalogEntry, loadCatalog, publicEntry, serversUsedBy, toToolCatalog, type CatalogEntry } from "./catalog.js";
+import { AppsConfigError, appsEnabled, toolkitSlug } from "../apps/composio.js";
 import { planAgent, PlannerError } from "./planner.js";
 import { confirmToolCall, createAgentVault, createManagedAgents, followSession, sendUserMessage, startSession } from "./runtime.js";
 import { requireAuth, userIdOf } from "../auth.js";
@@ -38,9 +39,19 @@ const RUN_WAIT_MS = 120_000;
 /** Playground streams end before the hosting function's time limit; the client reconnects. */
 const STREAM_MAX_MS = 240_000;
 
+// `?apps=gmail,slack` adds the user's connected apps as one more server.
 agentsRouter.get("/catalog", async (req, res) => {
-  res.json(await loadCatalog(userIdOf(req)));
+  const { servers, unavailable } = await loadCatalog(userIdOf(req));
+  const apps = appToolkits(typeof req.query.apps === "string" ? req.query.apps.split(",") : []);
+  if (apps.length > 0) servers.push(await appsCatalogEntry(userIdOf(req), apps));
+  res.json({ servers: servers.map(publicEntry), unavailable });
 });
+
+/** The app (toolkit) slugs in a request, cleaned up; none when connected apps aren't set up. */
+function appToolkits(value: unknown): string[] {
+  if (!appsEnabled() || !Array.isArray(value)) return [];
+  return [...new Set(value.flatMap((v) => toolkitSlug(v) ?? []))].slice(0, 20);
+}
 
 /**
  * The tools the user chose for this agent: MCP servers they ticked (none by
@@ -54,6 +65,9 @@ async function chosenTools(req: Request): Promise<{ servers: CatalogEntry[]; all
     ? BUILTIN_TOOLS.filter((tool) => builtins.includes(tool))
     : [];
   const servers = wanted.size > 0 ? (await loadCatalog(userIdOf(req))).servers.filter((s) => wanted.has(s.deploymentId)) : [];
+  // Connected apps the user ticked join as one more server.
+  const apps = appToolkits(req.body?.appToolkits);
+  if (apps.length > 0) servers.push(await appsCatalogEntry(userIdOf(req), apps));
   return { servers, allowedBuiltins };
 }
 
@@ -75,7 +89,7 @@ agentsRouter.post("/plan", async (req, res) => {
     },
     toToolCatalog(servers),
   );
-  res.json({ plan, catalog: servers });
+  res.json({ plan, catalog: servers.map(publicEntry) });
 });
 
 // Approve: create the Managed Agents and save the agent.
@@ -286,6 +300,7 @@ export function agentsErrorHandler(err: unknown, _req: Request, res: Response, n
   if (res.headersSent) return next(err);
   if (err instanceof PlanError || err instanceof PlannerError) return res.status(400).json({ error: err.message });
   if (err instanceof AgentConfigError) return res.status(500).json({ error: err.message });
+  if (err instanceof AppsConfigError) return res.status(503).json({ error: err.message });
   if (err instanceof Anthropic.APIError) {
     console.error("Anthropic API error:", err.status, err.message);
     return res.status(502).json({ error: `Anthropic API error (${err.status ?? "network"}): ${err.message}` });

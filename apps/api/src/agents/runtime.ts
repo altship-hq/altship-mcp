@@ -3,7 +3,6 @@ import { coordinatorRoster, toManagedAgentParams, type AgentPlan, type ToolCatal
 import { environmentId, getAnthropic } from "./anthropic.js";
 import { TurnTracker, toUiEvent, type AgentUiEvent } from "./events.js";
 import type { AgentRecord } from "./store.js";
-import { internalAccessKey } from "../access-keys.js";
 
 type AgentCreateParams = Parameters<Anthropic["beta"]["agents"]["create"]>[0];
 
@@ -39,17 +38,18 @@ export async function createManagedAgents(plan: AgentPlan, catalog: ToolCatalog)
 const MAX_VAULT_CREDENTIALS = 20;
 
 /**
- * Creates a vault holding altship's access key for each MCP server, so the
+ * Creates a vault holding the bearer token for each MCP server (altship's
+ * access key for a deployed server, the relay token for connected apps), so the
  * agent's calls to those (access-controlled) servers are authorized. The keys
  * are injected by Anthropic at egress and never enter the agent's sandbox.
  */
-export async function createAgentVault(agentId: string, servers: { url: string; projectId: string }[]): Promise<string> {
+export async function createAgentVault(agentId: string, servers: { url: string; token: string }[]): Promise<string> {
   const client = getAnthropic();
   const vault = await client.beta.vaults.create({ display_name: `altship agent ${agentId}`, metadata: { altship_agent_id: agentId } });
   for (const server of servers.slice(0, MAX_VAULT_CREDENTIALS)) {
     await client.beta.vaults.credentials.create(vault.id, {
       display_name: server.url,
-      auth: { type: "static_bearer", mcp_server_url: server.url, token: internalAccessKey(server.projectId) },
+      auth: { type: "static_bearer", mcp_server_url: server.url, token: server.token },
     });
   }
   return vault.id;

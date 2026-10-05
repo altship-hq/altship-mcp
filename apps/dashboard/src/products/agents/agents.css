@@ -656,6 +656,39 @@
   font-size: 13px;
 }
 
+/* Connected apps in the tool picker */
+.dash .agent-form .apps-search {
+  max-width: 320px;
+  margin: 0 0 10px;
+}
+
+.dash .tool-choice img {
+  flex: none;
+  margin-top: 1px;
+  border-radius: 3px;
+}
+
+.dash .tool-choice.app-unconnected {
+  cursor: default;
+  align-items: center;
+}
+
+.dash .tool-choice.app-unconnected span {
+  flex: 1;
+}
+
+.dash .agent-form .tool-choice.app-unconnected button {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.dash .agent-form .tool-choice small .link {
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+}
+
 .dash .tool-choice:has(input:checked) {
   border-color: #111;
 }

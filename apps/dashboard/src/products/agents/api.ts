@@ -1,4 +1,4 @@
-import { API_BASE, apiFetch, getJson, postJson } from "../../http.js";
+import { API_BASE, apiFetch, deleteJson, getJson, postJson } from "../../http.js";
 
 // Mirrors apps/api/src/agents (router, events) and packages/agent-design types.
 
@@ -154,14 +154,44 @@ export type AgentUiEvent =
   | { kind: "status"; id: string; status: "running" | "idle" | "terminated"; stopReason: string | null; at: string | null }
   | { kind: "error"; id: string; message: string; at: string | null };
 
-export function getCatalog(): Promise<Catalog> {
-  return getJson<Catalog>("/api/agents/catalog");
+/** The user's MCP servers, plus their connected apps as one more server when `appToolkits` names any. */
+export function getCatalog(appToolkits: string[] = []): Promise<Catalog> {
+  return getJson<Catalog>(`/api/agents/catalog${appToolkits.length > 0 ? `?apps=${encodeURIComponent(appToolkits.join(","))}` : ""}`);
 }
 
-/** The tools the user chose for an agent: MCP servers (may be none) and built-in tools. */
+/** Whether a catalog server is the user's connected apps rather than a server they built. */
+export function isAppsServer(server: Pick<CatalogServer, "deploymentId">): boolean {
+  return server.deploymentId.startsWith("apps:");
+}
+
+/** A third-party app (Gmail, Slack, ...) an agent can use once the user has signed in to it. */
+export interface AppInfo {
+  slug: string;
+  name: string;
+  logo: string | null;
+  connected: boolean;
+}
+
+/** `enabled` is false when connected apps aren't set up on this altship. */
+export function listApps(search = ""): Promise<{ enabled: boolean; apps: AppInfo[] }> {
+  return getJson(`/api/apps${search ? `?search=${encodeURIComponent(search)}` : ""}`);
+}
+
+/** Starts signing in to an app: resolves to the page to open. */
+export function connectApp(slug: string): Promise<{ url: string }> {
+  return postJson(`/api/apps/${encodeURIComponent(slug)}/connect`, {});
+}
+
+export function disconnectApp(slug: string): Promise<{ ok: true }> {
+  return deleteJson(`/api/apps/${encodeURIComponent(slug)}`);
+}
+
+/** The tools the user chose for an agent: MCP servers (may be none), built-in tools and connected apps. */
 export interface ToolChoice {
   serverDeploymentIds: string[];
   builtinTools: BuiltinTool[];
+  /** Slugs of the connected apps the agent may use. */
+  appToolkits: string[];
 }
 
 export function proposePlan(

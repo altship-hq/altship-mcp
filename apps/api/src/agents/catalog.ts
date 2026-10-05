@@ -2,11 +2,54 @@ import { PlaygroundSession } from "@altship/playground";
 import type { AgentPlan, CatalogServer, CatalogTool, ToolCatalog } from "@altship/agent-design";
 import { listDeployments, type DeploymentRecord } from "../store.js";
 import { internalAccessKey } from "../access-keys.js";
+import { AppsConfigError, ensureAgentSession, relayToken, relayUrl, sessionMcp } from "../apps/composio.js";
 
 export interface CatalogEntry extends CatalogServer {
+  /** The deployment's id, or "apps:<session id>" for the user's connected apps. */
   deploymentId: string;
-  /** Hosting project, which altship's own access key for the server is derived from. */
-  projectId: string;
+  /** The bearer token agents present to the server: held in the agent's vault, never sent to the dashboard. */
+  token: string;
+}
+
+/** A catalog entry as the dashboard sees it. */
+export function publicEntry({ token: _token, ...entry }: CatalogEntry): Omit<CatalogEntry, "token"> {
+  return entry;
+}
+
+/** What the connected-apps server is called in plans and to the agent runtime. */
+export const APPS_SERVER_NAME = "connected-apps";
+
+/**
+ * The user's connected apps as one catalog server: the tools of the apps
+ * chosen for an agent, served through altship's relay. Tools that aren't
+ * marked read-only are flagged sensitive, and destructive ones always ask.
+ */
+export async function appsCatalogEntry(userId: string, toolkits: string[]): Promise<CatalogEntry> {
+  const sessionId = await ensureAgentSession(userId, toolkits);
+  const url = relayUrl(sessionId);
+  if (!url) throw new AppsConfigError("Connected apps need API_PUBLIC_URL set, so agents can reach them.");
+
+  // Listed straight from the provider; agents go through the relay.
+  const mcp = await sessionMcp(sessionId);
+  const session = await withTimeout(PlaygroundSession.connect({ url: mcp.url, headers: mcp.headers }), 20_000);
+  try {
+    const tools = await withTimeout(session.listTools(), 20_000);
+    return {
+      deploymentId: `apps:${sessionId}`,
+      token: relayToken(sessionId),
+      name: APPS_SERVER_NAME,
+      title: "Connected apps",
+      url,
+      tools: tools.map((t) => ({
+        name: t.name,
+        description: t.description ?? "",
+        destructive: t.annotations?.destructiveHint === true,
+        sensitive: t.annotations?.readOnlyHint !== true,
+      })),
+    };
+  } finally {
+    await session.close().catch(() => {});
+  }
 }
 
 export interface UnavailableServer {
@@ -46,7 +89,7 @@ export async function loadCatalog(userId: string): Promise<{ servers: CatalogEnt
       try {
         servers.push({
           deploymentId: d.id,
-          projectId: d.projectId,
+          token: internalAccessKey(d.projectId),
           name: d.projectName,
           title: d.name,
           url: mcpEndpoint(d),

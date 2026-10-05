@@ -432,3 +432,22 @@ export function InviteAccept({ inviteId, email }: { inviteId: string; email: str
     </LoginCard>
   );
 }
+
+/**
+ * /apps/connected: where someone lands, in the tab that was opened for it,
+ * after signing in to an app for their agents. The tab they came from picks
+ * the connection up by itself.
+ */
+export function AppConnected() {
+  const failed = new URLSearchParams(window.location.search).get("status") === "failed";
+  return (
+    <LoginCard
+      title={failed ? "That didn't connect" : "App connected"}
+      copy={failed ? "The app wasn't connected. Close this tab and try Connect again." : "You can close this tab and go back to your agent."}
+    >
+      <button type="button" className="login-submit" onClick={() => window.close()}>
+        Close this tab
+      </button>
+    </LoginCard>
+  );
+}

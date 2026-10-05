@@ -1,7 +1,7 @@
 import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import Shell from "./Shell.js";
-import Login, { InviteAccept, OAuthConsent, ResetPassword, nextPath } from "./Login.js";
+import Login, { AppConnected, InviteAccept, OAuthConsent, ResetPassword, nextPath } from "./Login.js";
 import { useSession } from "./auth.js";
 import { navigate, usePath } from "./router.js";
 import "./products/mcp/builder.css";
@@ -19,6 +19,7 @@ function Root() {
   const onLogin = path === "login";
 
   useEffect(() => {
+    if (path === "apps/connected") return;
     if (session === null && !onLogin) {
       navigate(`login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
     } else if (session && onLogin) {
@@ -30,6 +31,8 @@ function Root() {
   if (onLogin) return session ? null : <Login />;
   if (path === "reset-password") return session ? <ResetPassword /> : null;
   if (path === "oauth/consent") return session ? <OAuthConsent /> : null;
+  // Where the app provider sends someone back after they sign in to an app (opened in its own tab).
+  if (path === "apps/connected") return <AppConnected />;
   if (path.startsWith("invite/")) return session ? <InviteAccept inviteId={path.slice("invite/".length)} email={session.user.email} /> : null;
   return session ? <Shell path={path} session={session} /> : null;
 }

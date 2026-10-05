@@ -8,7 +8,8 @@
 //   DASHBOARD_URL      where invite links point, e.g. https://pilot.altship.io
 //                      (defaults to the first ALLOWED_ORIGINS entry)
 
-function dashboardUrl(): string {
+/** Where the dashboard is served, without a trailing slash. */
+export function dashboardUrl(): string {
   const url = process.env.DASHBOARD_URL ?? (process.env.ALLOWED_ORIGINS ?? "http://localhost:5173").split(",")[0];
   return url.trim().replace(/\/$/, "");
 }

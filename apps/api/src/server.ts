@@ -51,6 +51,7 @@ import { PLANS, planOf, retentionCutoff } from "./plans.js";
 import { runRetention } from "./retention.js";
 import { agentsRouter, agentsErrorHandler } from "./agents/router.js";
 import { endUsersRouter } from "./end-users/router.js";
+import { appsRouter, appsErrorHandler } from "./apps/router.js";
 import { listConnections, revokeConnection } from "./end-users/store.js";
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "http://localhost:5173")
@@ -109,6 +110,7 @@ app.all("/api/cron/retention", async (req, res) => {
 });
 
 app.use("/api/agents", agentsRouter, agentsErrorHandler);
+app.use("/api/apps", appsRouter, appsErrorHandler);
 
 // Everything else is the MCP Creator dashboard API: signed-in users only.
 app.use(["/api/tools", "/api/generate", "/api/deployments", "/api/deploy", "/api/invites", "/api/logs"], requireAuth);
