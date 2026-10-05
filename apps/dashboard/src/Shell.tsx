@@ -109,7 +109,7 @@ export default function Shell({ path, session }: { path: string; session: Sessio
           ) : product?.id === "agents" && page ? (
             <AgentsProduct subpath={subpath} />
           ) : product?.id === "observability" && page ? (
-            <ObservabilityProduct />
+            <ObservabilityProduct subpath={subpath} />
           ) : (
             <div className="empty">
               <p>This page doesn't exist.</p>

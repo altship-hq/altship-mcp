@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { listDeployments, type DeploymentRecord } from "../mcp/api.js";
 import { Link } from "../../router.js";
 import { PageHead, Stat } from "../../ui.js";
-import { listLogs, type ToolCall } from "./api.js";
+import { listAgents, type AgentRecord } from "../agents/api.js";
+import { listAgentRuns, listLogs, type AgentRunLog, type ToolCall } from "./api.js";
 
-// Observability: the tool calls made on your managed MCP servers. Each
-// server exports them as OpenTelemetry spans; this lists what was received.
+// Observability: the tool calls made on your managed MCP servers (each server
+// exports them as OpenTelemetry spans; this lists what was received) and the
+// runs of your agents.
 
 const ERRORS: Record<string, string> = {
   unknown_tool: "Unknown tool",
@@ -138,8 +140,153 @@ export function ToolCallLog({ deploymentId, pageSize = 50, summary = false }: { 
   );
 }
 
-/** /observability: every recorded tool call, optionally for one server. */
-export default function ObservabilityProduct() {
+const RUN_STATUS: Record<AgentRunLog["status"], string> = {
+  running: "Running",
+  requires_action: "Needs approval",
+  completed: "Completed",
+  failed: "Failed",
+};
+
+/** A table of agent runs, newest first: for one agent (`agentId`) or all of them. */
+function AgentRunLogTable({ agentId }: { agentId?: string }) {
+  const [runs, setRuns] = useState<AgentRunLog[] | null>(null);
+  const [nextBefore, setNextBefore] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function load(before?: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      const page = await listAgentRuns({ agentId, before, limit: 50 });
+      setRuns((current) => (before ? [...(current ?? []), ...page.runs] : page.runs));
+      setNextBefore(page.nextBefore);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+    setBusy(false);
+  }
+
+  useEffect(() => {
+    setRuns(null);
+    load();
+  }, [agentId]);
+
+  const durations = (runs ?? []).flatMap((r) => (r.endedAt ? [Date.parse(r.endedAt) - Date.parse(r.createdAt)] : []));
+  const typical = median(durations);
+
+  return (
+    <>
+      <div className="stats">
+        <Stat label={nextBefore ? "Runs loaded" : "Runs"} value={runs ? String(runs.length) : "—"} />
+        <Stat label="Failed" value={runs ? String(runs.filter((r) => r.status === "failed").length) : "—"} />
+        <Stat label="Median duration" value={typical === null ? "—" : formatDuration(typical)} />
+      </div>
+      {error && <div className="notice">{error}</div>}
+
+      {runs === null ? (
+        !error && <div className="empty">Loading…</div>
+      ) : runs.length === 0 ? (
+        <div className="empty">
+          <p>No agent runs yet. Try an agent in its Playground or call its endpoint.</p>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table className="servers logs runs">
+            <thead>
+              <tr>
+                <th>Started</th>
+                {!agentId && <th>Agent</th>}
+                <th>Called from</th>
+                <th>Status</th>
+                <th>Tool calls</th>
+                <th>Duration</th>
+                <th>Input</th>
+                <th>Output</th>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.map((r) => (
+                <tr key={r.sessionId}>
+                  <td className="date">{formatTime(r.createdAt)}</td>
+                  {!agentId && (
+                    <td>
+                      <Link to={`agents/${r.agentId}/runs`}>{r.agentName}</Link>
+                    </td>
+                  )}
+                  <td className="server-name">
+                    <strong>{r.source === "endpoint" ? "API endpoint" : "Playground (you)"}</strong>
+                    <small title="Run id">{r.sessionId}</small>
+                  </td>
+                  <td>
+                    <span className={`status-tag ${r.status}`}>{RUN_STATUS[r.status]}</span>
+                  </td>
+                  <td>{r.toolCalls ?? "—"}</td>
+                  <td className="date">{r.endedAt ? formatDuration(Math.max(Date.parse(r.endedAt) - Date.parse(r.createdAt), 0)) : "—"}</td>
+                  <td className="run-text">{r.inputPreview ?? "—"}</td>
+                  <td className="run-text">{r.outputPreview ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {runs !== null && (
+        <div className="log-actions">
+          <button type="button" className="copy-button" disabled={busy} onClick={() => load()}>
+            {busy ? "Loading…" : "Refresh"}
+          </button>
+          {nextBefore && (
+            <button type="button" className="copy-button" disabled={busy} onClick={() => load(nextBefore)}>
+              Load older
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** /observability/agents: every agent run, optionally for one agent. */
+function AgentRunsPage() {
+  const [agents, setAgents] = useState<AgentRecord[]>([]);
+  const [agentId, setAgentId] = useState("");
+
+  useEffect(() => {
+    listAgents()
+      .then(setAgents)
+      .catch(() => setAgents([]));
+  }, []);
+
+  return (
+    <>
+      <PageHead
+        title="Agent runs"
+        description="Every run of your agents, from the playground or their API endpoints: how it went, how long it took and how many tools it called. The tool calls themselves are under Tool calls."
+        action={
+          <select className="log-filter" aria-label="Agent" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+            <option value="">All agents</option>
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+        }
+      />
+      <AgentRunLogTable agentId={agentId || undefined} />
+    </>
+  );
+}
+
+/** /observability: every recorded tool call, optionally for one server; /observability/agents: agent runs. */
+export default function ObservabilityProduct({ subpath }: { subpath: string }) {
+  if (subpath === "agents") return <AgentRunsPage />;
+  return <ToolCallsPage />;
+}
+
+function ToolCallsPage() {
   const [deployments, setDeployments] = useState<DeploymentRecord[]>([]);
   const [deploymentId, setDeploymentId] = useState("");
 
@@ -152,7 +299,7 @@ export default function ObservabilityProduct() {
   return (
     <>
       <PageHead
-        title="Logs"
+        title="Tool calls"
         description="Every tool call on your managed MCP servers: who called which tool, how it went and how long it took. Arguments and responses are never recorded."
         action={
           <select className="log-filter" aria-label="Server" value={deploymentId} onChange={(e) => setDeploymentId(e.target.value)}>

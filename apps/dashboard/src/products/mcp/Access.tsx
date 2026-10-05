@@ -511,7 +511,7 @@ export function ServerPage({
         <section className="dash-section">
           <div className="section-row">
             <h2>Recent calls</h2>
-            <Link to="observability">All logs →</Link>
+            <Link to="observability">All tool calls →</Link>
           </div>
           <ToolCallLog deploymentId={deployment.id} pageSize={10} />
         </section>
@@ -642,7 +642,7 @@ export function ServerPage({
       <section className="dash-section">
         <div className="section-row">
           <h2>Recent calls</h2>
-          <Link to="observability">All logs →</Link>
+          <Link to="observability">All tool calls →</Link>
         </div>
         <ToolCallLog deploymentId={deployment.id} pageSize={10} />
       </section>

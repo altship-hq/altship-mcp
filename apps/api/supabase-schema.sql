@@ -99,6 +99,11 @@ create table if not exists agent_runs (
 
 create index if not exists agent_runs_agent_id_idx on agent_runs (agent_id, created_at desc);
 
+-- For Observability: when the run last settled (answered, failed or waiting
+-- on an approval) and how many tool calls the agent has made in it.
+alter table agent_runs add column if not exists ended_at timestamptz;
+alter table agent_runs add column if not exists tool_calls integer;
+
 alter table agent_runs enable row level security;
 
 -- ---- End users of "for your customers" MCP servers --------------------------

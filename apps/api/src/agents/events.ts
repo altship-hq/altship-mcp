@@ -123,6 +123,8 @@ export class TurnTracker {
   private waitingSinceUserInput = false;
   private readonly asks = new Map<string, Extract<AgentUiEvent, { kind: "tool_call" }>>();
   private finalReply = "";
+  /** Tool calls the agent has made in the session so far (its whole history is replayed on each follow). */
+  toolCalls = 0;
   status: "running" | "requires_action" | "completed" | "failed" = "running";
 
   observe(event: AgentUiEvent) {
@@ -139,6 +141,7 @@ export class TurnTracker {
         this.status = this.asks.size > 0 ? "requires_action" : "running";
         break;
       case "tool_call":
+        this.toolCalls += 1;
         if (event.permission === "ask") this.asks.set(event.id, event);
         break;
       case "message":

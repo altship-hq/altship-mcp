@@ -12,6 +12,7 @@ import {
   getRun,
   insertAgent,
   insertRun,
+  listRunsForAgents,
   listAgents,
   listRuns,
   setAgentVault,
@@ -108,6 +109,26 @@ agentsRouter.get("/", async (req, res) => {
   res.json(await listAgents(userIdOf(req)));
 });
 
+// Runs across all of the user's agents (or one, with ?agentId=), newest first,
+// for Observability. `before` (a run's start time) pages further back.
+agentsRouter.get("/runs", async (req, res) => {
+  const agents = await listAgents(userIdOf(req));
+  const agentId = typeof req.query.agentId === "string" ? req.query.agentId : null;
+  const wanted = agentId ? agents.filter((a) => a.id === agentId) : agents;
+  if (agentId && wanted.length === 0) return res.status(404).json({ error: "Agent not found." });
+
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  const before = typeof req.query.before === "string" && !Number.isNaN(Date.parse(req.query.before)) ? req.query.before : undefined;
+  // One extra row tells us whether there's another page.
+  const rows = await listRunsForAgents(wanted.map((a) => a.id), { limit: limit + 1, before });
+  const runs = rows.slice(0, limit);
+  const names = new Map(agents.map((a) => [a.id, a.name]));
+  res.json({
+    runs: runs.map((run) => ({ ...run, agentName: names.get(run.agentId) ?? "" })),
+    nextBefore: rows.length > limit ? runs[runs.length - 1].createdAt : null,
+  });
+});
+
 agentsRouter.get("/:id", async (req, res) => {
   const agent = await requireAgent(req, res);
   if (agent) res.json(agent);
@@ -174,7 +195,7 @@ agentsRouter.get("/:id/sessions/:sid/stream", async (req, res) => {
       onEvent: (event) => res.write(`data: ${JSON.stringify(event)}\n\n`),
     });
     if (tracker.settled && (await getRun(agent.id, sessionId))) {
-      await updateRun(sessionId, { status: tracker.status, output: tracker.reply || null });
+      await updateRun(sessionId, { status: tracker.status, output: tracker.reply || null, toolCalls: tracker.toolCalls });
     }
     res.write(`event: done\ndata: ${JSON.stringify({ status: tracker.status })}\n\n`);
   } catch (err) {
@@ -225,7 +246,7 @@ agentsRouter.post("/:id/runs/:sid/confirm", async (req, res) => {
 });
 
 async function runResponse(sessionId: string, tracker: Awaited<ReturnType<typeof followSession>>) {
-  await updateRun(sessionId, { status: tracker.status, output: tracker.reply || null });
+  await updateRun(sessionId, { status: tracker.status, output: tracker.reply || null, toolCalls: tracker.toolCalls });
   return {
     status: tracker.status,
     session_id: sessionId,

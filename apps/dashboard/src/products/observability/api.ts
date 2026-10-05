@@ -23,6 +23,36 @@ export interface LogPage {
   nextBefore: string | null;
 }
 
+/** One run of an agent, from the playground or its API endpoint. */
+export interface AgentRunLog {
+  sessionId: string;
+  agentId: string;
+  agentName: string;
+  createdAt: string;
+  source: "playground" | "endpoint";
+  status: "running" | "requires_action" | "completed" | "failed";
+  inputPreview: string | null;
+  outputPreview: string | null;
+  /** When it last settled; null while running or on older runs. */
+  endedAt: string | null;
+  /** Tool calls the agent made; null on older runs. */
+  toolCalls: number | null;
+}
+
+export interface AgentRunPage {
+  runs: AgentRunLog[];
+  nextBefore: string | null;
+}
+
+export function listAgentRuns(options: { agentId?: string; before?: string; limit?: number } = {}): Promise<AgentRunPage> {
+  const params = new URLSearchParams();
+  if (options.agentId) params.set("agentId", options.agentId);
+  if (options.before) params.set("before", options.before);
+  if (options.limit) params.set("limit", String(options.limit));
+  const query = params.toString();
+  return getJson<AgentRunPage>(`/api/agents/runs${query ? `?${query}` : ""}`);
+}
+
 export function listLogs(options: { deploymentId?: string; before?: string; limit?: number } = {}): Promise<LogPage> {
   const params = new URLSearchParams();
   if (options.deploymentId) params.set("deploymentId", options.deploymentId);

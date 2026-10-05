@@ -39,6 +39,10 @@ export interface AgentRunRecord {
   status: RunStatus;
   inputPreview: string | null;
   outputPreview: string | null;
+  /** When the run last settled; null while running, and on runs from before this was recorded. */
+  endedAt: string | null;
+  /** Tool calls the agent made; null on runs from before this was recorded. */
+  toolCalls: number | null;
 }
 
 interface AgentRunRow {
@@ -49,6 +53,8 @@ interface AgentRunRow {
   status: RunStatus;
   input_preview: string | null;
   output_preview: string | null;
+  ended_at?: string | null;
+  tool_calls?: number | null;
 }
 
 const PREVIEW_LENGTH = 280;
@@ -77,6 +83,8 @@ function fromRunRow(row: AgentRunRow): AgentRunRecord {
     status: row.status,
     inputPreview: row.input_preview,
     outputPreview: row.output_preview,
+    endedAt: row.ended_at ?? null,
+    toolCalls: row.tool_calls ?? null,
   };
 }
 
@@ -140,11 +148,18 @@ export async function insertRun(run: { sessionId: string; agentId: string; sourc
   if (error) throw new Error(`Failed to record run: ${error.message}`);
 }
 
-export async function updateRun(sessionId: string, update: { status: RunStatus; output?: string | null }) {
-  const { error } = await getSupabase()
-    .from("agent_runs")
-    .update({ status: update.status, ...(update.output !== undefined ? { output_preview: preview(update.output) } : {}) })
-    .eq("session_id", sessionId);
+export async function updateRun(sessionId: string, update: { status: RunStatus; output?: string | null; toolCalls?: number }) {
+  const base = { status: update.status, ...(update.output !== undefined ? { output_preview: preview(update.output) } : {}) };
+  // What Observability shows on top: when the run last settled, and its tool calls.
+  const extra = {
+    ...(update.status !== "running" ? { ended_at: new Date().toISOString() } : {}),
+    ...(update.toolCalls !== undefined ? { tool_calls: update.toolCalls } : {}),
+  };
+  let { error } = await getSupabase().from("agent_runs").update({ ...base, ...extra }).eq("session_id", sessionId);
+  // Those columns were added later; a database without them still records the run.
+  if (error && Object.keys(extra).length > 0 && /ended_at|tool_calls/.test(error.message)) {
+    ({ error } = await getSupabase().from("agent_runs").update(base).eq("session_id", sessionId));
+  }
   if (error) throw new Error(`Failed to update run: ${error.message}`);
 }
 
@@ -166,6 +181,16 @@ export async function listRuns(agentId: string): Promise<AgentRunRecord[]> {
     .eq("agent_id", agentId)
     .order("created_at", { ascending: false })
     .limit(100);
+  if (error) throw new Error(`Failed to list runs: ${error.message}`);
+  return (data as AgentRunRow[]).map(fromRunRow);
+}
+
+/** The most recent runs of those agents, newest first; `before` pages further back. */
+export async function listRunsForAgents(agentIds: string[], options: { limit: number; before?: string }): Promise<AgentRunRecord[]> {
+  if (agentIds.length === 0) return [];
+  let query = getSupabase().from("agent_runs").select("*").in("agent_id", agentIds).order("created_at", { ascending: false }).limit(options.limit);
+  if (options.before) query = query.lt("created_at", options.before);
+  const { data, error } = await query;
   if (error) throw new Error(`Failed to list runs: ${error.message}`);
   return (data as AgentRunRow[]).map(fromRunRow);
 }

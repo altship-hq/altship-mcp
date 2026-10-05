@@ -66,10 +66,13 @@ export const PRODUCTS: Product[] = [
   {
     id: "observability",
     name: "Observability",
-    description: "Logs for every tool call on your MCP servers: who called what, how it went and how long it took.",
+    description: "Logs for your MCP servers and agents: every tool call and agent run, how it went and how long it took.",
     status: "live",
     icon: <path d="M3 16h14M5 13l3-4 3 2 4-6" />,
-    pages: [{ path: "", label: "Logs" }],
+    pages: [
+      { path: "", label: "Tool calls" },
+      { path: "agents", label: "Agent runs" },
+    ],
   },
   {
     id: "gateway",
