@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { validatePlan, PlanError } from "./validate.js";
 import { toManagedAgentParams, coordinatorRoster } from "./to-managed-agents.js";
+import { compileFlow } from "./flow.js";
 import type { ToolCatalog } from "./types.js";
 
 const catalog: ToolCatalog = [
@@ -197,3 +198,121 @@ describe("built-in tools (no MCP server needed)", () => {
   });
 });
 
+
+describe("execution flows", () => {
+  const node = (id: string, type: string, extra: Record<string, unknown> = {}) => ({ id, type, position: { x: 0, y: 0 }, ...extra });
+  const edge = (source: string, target: string, route?: string) => ({ id: `${source}-${target}`, source, target, ...(route ? { route } : {}) });
+  const runner = { model: "claude-sonnet-5", instructions: "Answer in English." };
+
+  // Input → Extract → Router → (India | Japan) → Output, plus a tool step before the output.
+  const routed = () =>
+    plan(
+      [
+        agent({ key: "extract", name: "Extract" }),
+        agent({ key: "india", name: "India Agent" }),
+        agent({ key: "japan", name: "Japan Agent" }),
+        agent({ key: "unused", name: "Unused" }),
+      ],
+      {
+        flowGraph: {
+          runner,
+          nodes: [
+            node("in", "input"),
+            node("a", "agent", { agentKey: "extract" }),
+            node("r", "router", {
+              label: "Country",
+              rule: "Use the country the request is about.",
+              routes: [
+                { id: "r1", label: "India" },
+                { id: "r2", label: "Japan" },
+              ],
+            }),
+            node("b", "agent", { agentKey: "india" }),
+            node("c", "agent", { agentKey: "japan" }),
+            node("t", "tool", { tool: { server: "petstore", tool: "user.delete", permission: "auto", reason: "" } }),
+            node("out", "output"),
+          ],
+          edges: [edge("in", "a"), edge("a", "r"), edge("r", "b", "r1"), edge("r", "c", "r2"), edge("b", "t"), edge("c", "out"), edge("t", "out")],
+        },
+      },
+    );
+
+  it("keeps the flow, drops agents it doesn't use, and makes destructive tool steps ask", () => {
+    const result = validatePlan(routed(), catalog);
+    expect(result.agents.map((a) => a.key)).toEqual(["extract", "india", "japan"]);
+    expect(result.agents.every((a) => a.role === "specialist")).toBe(true);
+    expect(result.flowGraph!.runner).toEqual(runner);
+    expect(result.flowGraph!.nodes.find((n) => n.id === "t")!.tool).toMatchObject({ tool: "user.delete", permission: "ask" });
+  });
+
+  it("compiles to a coordinator that follows the flow, with the agents as specialists and tool steps as its tools", () => {
+    const compiled = compileFlow(validatePlan(routed(), catalog));
+    expect(compiled.flowGraph).toBeUndefined();
+    expect(compiled.flow).toBe("team");
+    const [coordinator, ...specialists] = compiled.agents;
+    expect(coordinator).toMatchObject({ role: "coordinator", model: "claude-sonnet-5" });
+    expect(specialists.map((a) => a.name)).toEqual(["Extract", "India Agent", "Japan Agent"]);
+    expect(coordinator.tools.map((t) => t.tool)).toEqual(["user.delete"]);
+
+    const text = coordinator.instructions;
+    expect(text).toContain("Start with step 1");
+    expect(text).toContain('Step 1. Hand the user\'s request to the agent "Extract"');
+    expect(text).toContain("Rule: Use the country the request is about.");
+    expect(text).toMatch(/- India: go to step 3/);
+    expect(text).toMatch(/- Japan: go to step 4/);
+    expect(text).toContain('Call the tool "user.delete" (from the petstore server) yourself');
+    expect(text).toContain("Answer in English.");
+
+    const params = toManagedAgentParams(compiled, catalog);
+    expect(params.primary.key).toBe(coordinator.key);
+    expect(params.specialists).toHaveLength(3);
+  });
+
+  it("runs Input → agent → Output as that agent alone", () => {
+    const simple = plan([agent()], {
+      flowGraph: { runner, nodes: [node("in", "input"), node("a", "agent", { agentKey: "helper" }), node("out", "output")], edges: [edge("in", "a"), edge("a", "out")] },
+    });
+    const compiled = compileFlow(validatePlan(simple, catalog));
+    expect(compiled.flow).toBe("single");
+    expect(compiled.agents).toHaveLength(1);
+    expect(compiled.agents[0]).toMatchObject({ key: "helper", role: "solo", instructions: "Help the user." });
+  });
+
+  it("runs a flow with no agents as the coordinator on its own", () => {
+    const toolOnly = plan([], {
+      flowGraph: {
+        runner,
+        nodes: [node("in", "input"), node("t", "tool", { tool: { server: "petstore", tool: "user.get", permission: "auto", reason: "" } }), node("out", "output")],
+        edges: [edge("in", "t"), edge("t", "out")],
+      },
+    });
+    const compiled = compileFlow(validatePlan(toolOnly, catalog));
+    expect(compiled.agents).toHaveLength(1);
+    expect(compiled.agents[0].role).toBe("solo");
+    expect(compiled.agents[0].tools.map((t) => t.tool)).toEqual(["user.get"]);
+  });
+
+  it("follows an agent's key when it is normalized", () => {
+    const renamed = plan([agent({ key: "My Helper!" })], {
+      flowGraph: { runner, nodes: [node("in", "input"), node("a", "agent", { agentKey: "My Helper!" }), node("out", "output")], edges: [edge("in", "a"), edge("a", "out")] },
+    });
+    const result = validatePlan(renamed, catalog);
+    expect(result.flowGraph!.nodes[1].agentKey).toBe(result.agents[0].key);
+  });
+
+  it.each([
+    ["no output", (f: any) => (f.nodes = f.nodes.filter((n: any) => n.type !== "output")) && (f.edges = f.edges.filter((e: any) => e.target !== "out")), /Output/],
+    ["a step with nothing after it", (f: any) => (f.edges = f.edges.filter((e: any) => e.source !== "c")), /isn't connected to a next step/],
+    ["an unconnected route", (f: any) => (f.edges = f.edges.filter((e: any) => e.route !== "r2")), /Route "Japan"/],
+    ["an unreachable step", (f: any) => f.nodes.push(node("x", "output")), /can't be reached/],
+    ["a router with no rule", (f: any) => (f.nodes.find((n: any) => n.id === "r").rule = " "), /needs a rule/],
+    ["a tool that isn't in the catalog", (f: any) => (f.nodes.find((n: any) => n.id === "t").tool.tool = "user.explode"), /isn't on the MCP servers/],
+    ["an agent step without its agent", (f: any) => (f.nodes.find((n: any) => n.id === "a").agentKey = "ghost"), /isn't in the plan/],
+    ["a second input", (f: any) => f.nodes.push(node("in2", "input")), /exactly one Input/],
+  ])("rejects a flow with %s", (_name, breakIt, message) => {
+    const broken = routed();
+    breakIt((broken as any).flowGraph);
+    expect(() => validatePlan(broken, catalog)).toThrow(PlanError);
+    expect(() => validatePlan(broken, catalog)).toThrow(message);
+  });
+});

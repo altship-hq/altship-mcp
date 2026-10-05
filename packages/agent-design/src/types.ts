@@ -80,11 +80,65 @@ export interface PlanGap {
   suggestion: string;
 }
 
+/** A step in an execution flow. What it does depends on `type`. */
+export interface FlowNode {
+  /** Unique within the flow. */
+  id: string;
+  type: "input" | "output" | "agent" | "router" | "tool";
+  /** Where the node sits on the canvas. */
+  position: { x: number; y: number };
+  /** agent: the PlannedAgent.key this step hands work to. */
+  agentKey?: string;
+  /** router, tool: the step's name on the canvas. */
+  label?: string;
+  /** router: how to choose a route, in plain words. */
+  rule?: string;
+  /** router: the paths it can take; each needs at least one connection. */
+  routes?: { id: string; label: string }[];
+  /** tool: the MCP tool this step calls (or `builtinTool`, never both). */
+  tool?: PlannedTool;
+  /** tool: the built-in tool this step calls. */
+  builtinTool?: PlannedBuiltinTool;
+}
+
+/** A connection: when `source` is done, `target` runs next with its result. */
+export interface FlowEdge {
+  id: string;
+  source: string;
+  target: string;
+  /** From a router: which of its routes this connection is for. */
+  route?: string;
+}
+
+/**
+ * An execution flow the user drew: steps and the connections between them.
+ * It's run by a coordinator that follows it as instructions and hands work to
+ * the agents in it (see flow.ts), so the order is followed by a model rather
+ * than enforced.
+ */
+export interface AgentFlow {
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+  /** The coordinator that runs the flow. Not a node: it is the flow. */
+  runner: {
+    model: AgentModel;
+    /** Extra guidance on top of the flow itself. */
+    instructions: string;
+  };
+}
+
 export interface AgentPlan {
   name: string;
   description: string;
   flow: "single" | "team";
+  /**
+   * With a `flowGraph`: the agents its steps hand work to (their roles aren't
+   * used; the flow's runner coordinates). Without one: a solo agent, or one
+   * coordinator and its specialists.
+   */
   agents: PlannedAgent[];
+  /** The execution flow, when the user designed one. Plans saved before flows existed have none. */
+  flowGraph?: AgentFlow;
   /** Capabilities the description needs that no catalog tool provides. */
   gaps: PlanGap[];
   /** Things the planner assumed and the user should confirm. */

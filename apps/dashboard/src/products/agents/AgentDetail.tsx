@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "../../router.js";
 import { PageHead } from "../../ui.js";
+import FlowEditor from "./FlowEditor.js";
 import {
   confirmPlaygroundTool,
   endpointUrl,
@@ -14,10 +15,11 @@ import {
   type AgentUiEvent,
   type RunStatus,
   flowLabel,
+  withFlow,
   toolCountOf,
 } from "./api.js";
 
-type Tab = "playground" | "deploy" | "runs";
+type Tab = "playground" | "flow" | "deploy" | "runs";
 
 export default function AgentDetail({ id, tab }: { id: string; tab: Tab }) {
   const [agent, setAgent] = useState<AgentRecord | null>(null);
@@ -49,6 +51,9 @@ export default function AgentDetail({ id, tab }: { id: string; tab: Tab }) {
         <Link to={`agents/${id}`} aria-current={tab === "playground" ? "page" : undefined}>
           Playground
         </Link>
+        <Link to={`agents/${id}/flow`} aria-current={tab === "flow" ? "page" : undefined}>
+          Flow
+        </Link>
         <Link to={`agents/${id}/deploy`} aria-current={tab === "deploy" ? "page" : undefined}>
           Deploy
         </Link>
@@ -58,6 +63,12 @@ export default function AgentDetail({ id, tab }: { id: string; tab: Tab }) {
       </nav>
 
       {tab === "playground" && <Playground agent={agent} />}
+      {tab === "flow" && (
+        <>
+          <p className="agent-summary">How this agent works through a request. To change the flow, create a new agent.</p>
+          <FlowEditor plan={withFlow(agent.plan)} />
+        </>
+      )}
       {tab === "deploy" && <Deploy agent={agent} />}
       {tab === "runs" && <Runs agent={agent} />}
     </>

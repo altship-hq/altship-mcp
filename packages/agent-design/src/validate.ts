@@ -2,6 +2,7 @@ import {
   AGENT_MODELS,
   BUILTIN_GROUPS,
   BUILTIN_TOOLS,
+  type AgentFlow,
   type AgentModel,
   type BuiltinTool,
   type AgentPlan,
@@ -12,6 +13,7 @@ import {
   type PlannedTool,
   type ToolCatalog,
 } from "./types.js";
+import { FlowError, normalizeFlow } from "./flow.js";
 
 /** Managed Agents allows 1-20 roster entries on a coordinator. */
 export const MAX_SPECIALISTS = 20;
@@ -27,6 +29,8 @@ export class PlanError extends Error {}
  * - destructive tools always require approval ("ask")
  * - unknown models fall back to the default model
  * - agent keys and names are unique; a team has exactly one coordinator
+ * - a plan with a flow (flowGraph) has the flow checked too: its agents are the
+ *   ones its steps use, and its tool steps follow the same rules as agent tools
  */
 export interface ValidateOptions {
   /** Built-in tools the user enabled for this agent; others are dropped. */
@@ -36,8 +40,10 @@ export interface ValidateOptions {
 export function validatePlan(raw: unknown, catalog: ToolCatalog, options: ValidateOptions = {}): AgentPlan {
   const allowedBuiltins = new Set(options.allowedBuiltins ?? []);
   const input = asObject(raw, "plan");
+  const hasFlow = input.flowGraph !== undefined && input.flowGraph !== null;
   const agentsIn = asArray(input.agents, "plan.agents");
-  if (agentsIn.length === 0) throw new PlanError("A plan needs at least one agent.");
+  // A flow can be made of tool steps and routers alone.
+  if (agentsIn.length === 0 && !hasFlow) throw new PlanError("A plan needs at least one agent.");
 
   const gaps: PlanGap[] = asArray(input.gaps ?? [], "plan.gaps").map((g, i) => {
     const gap = asObject(g, `plan.gaps[${i}]`);
@@ -46,10 +52,13 @@ export function validatePlan(raw: unknown, catalog: ToolCatalog, options: Valida
 
   const usedKeys = new Set<string>();
   const usedNames = new Set<string>();
+  // Keys can change when normalized; a flow's agent steps follow them.
+  const renamedKeys = new Map<string, string>();
   let agents: PlannedAgent[] = agentsIn.map((a, i) => {
     const agent = asObject(a, `plan.agents[${i}]`);
     const name = uniqueName(asString(agent.name, "agent.name").trim() || `Agent ${i + 1}`, usedNames);
     const key = uniqueKey(slugify(asString(agent.key ?? "", "agent.key")) || slugify(name) || `agent-${i + 1}`, usedKeys);
+    if (typeof agent.key === "string" && !renamedKeys.has(agent.key)) renamedKeys.set(agent.key, key);
     const tools = normalizeTools(asArray(agent.tools ?? [], `${name}.tools`), catalog, gaps);
     const builtinTools = normalizeBuiltinTools(asArray(agent.builtinTools ?? [], `${name}.builtinTools`), allowedBuiltins, gaps);
     return {
@@ -64,7 +73,14 @@ export function validatePlan(raw: unknown, catalog: ToolCatalog, options: Valida
     };
   });
 
-  if (agents.length === 1) {
+  let flowGraph: AgentFlow | undefined;
+  if (hasFlow) {
+    flowGraph = validateFlow(input.flowGraph, renamedKeys, new Set(agents.map((a) => a.key)), catalog, allowedBuiltins);
+    // Only the agents the flow uses are kept; its runner coordinates them.
+    const used = new Set(flowGraph.nodes.map((n) => n.agentKey));
+    agents = agents.filter((a) => used.has(a.key)).map((a) => ({ ...a, role: "specialist" }));
+    if (agents.length > MAX_SPECIALISTS) throw new PlanError(`A flow can use at most ${MAX_SPECIALISTS} agents.`);
+  } else if (agents.length === 1) {
     agents[0].role = "solo";
   } else {
     // Exactly one coordinator: the first one the plan named, else the first agent.
@@ -76,16 +92,62 @@ export function validatePlan(raw: unknown, catalog: ToolCatalog, options: Valida
   }
 
   return {
-    name: asString(input.name, "plan.name").trim() || agents[0].name,
+    name: asString(input.name, "plan.name").trim() || agents[0]?.name || "Agent",
     description: asString(input.description ?? "", "plan.description").trim(),
-    flow: agents.length === 1 ? "single" : "team",
+    flow: agents.length > 1 || (flowGraph && agents.length > 0) ? "team" : "single",
     agents,
+    ...(flowGraph ? { flowGraph } : {}),
     gaps: dedupeGaps(gaps),
     assumptions: asArray(input.assumptions ?? [], "plan.assumptions").map((a) => asString(a, "assumption")),
     testPrompts: asArray(input.testPrompts ?? [], "plan.testPrompts")
       .map((p) => asString(p, "testPrompt"))
       .slice(0, MAX_TEST_PROMPTS),
   };
+}
+
+/**
+ * Checks a flow against the plan's agents and the tool catalog. Unlike an
+ * agent's tools, a tool step whose tool isn't available is an error, not a
+ * gap: the flow can't run without that step.
+ */
+function validateFlow(
+  raw: unknown,
+  renamedKeys: Map<string, string>,
+  agentKeys: Set<string>,
+  catalog: ToolCatalog,
+  allowedBuiltins: Set<BuiltinTool>,
+): AgentFlow {
+  const rawFlow = asObject(raw, "plan.flowGraph");
+  const withKeys = {
+    ...rawFlow,
+    nodes: asArray(rawFlow.nodes, "plan.flowGraph.nodes").map((n) => {
+      const node = asObject(n, "plan.flowGraph.nodes[]");
+      return typeof node.agentKey === "string" ? { ...node, agentKey: renamedKeys.get(node.agentKey) ?? node.agentKey } : node;
+    }),
+  };
+
+  let flow: AgentFlow;
+  try {
+    flow = normalizeFlow(withKeys, agentKeys);
+  } catch (err) {
+    if (err instanceof FlowError) throw new PlanError(err.message);
+    throw err;
+  }
+
+  for (const node of flow.nodes) {
+    if (node.type !== "tool") continue;
+    const unavailable: PlanGap[] = [];
+    if (node.tool) {
+      const [tool] = normalizeTools([node.tool], catalog, unavailable);
+      if (!tool) throw new PlanError(`A tool step uses "${String((node.tool as { tool?: unknown }).tool)}", which isn't on the MCP servers chosen for this agent.`);
+      node.tool = tool;
+    } else {
+      const [tool] = normalizeBuiltinTools([node.builtinTool], allowedBuiltins, unavailable);
+      if (!tool) throw new PlanError("A tool step uses a built-in tool that isn't turned on for this agent.");
+      node.builtinTool = tool;
+    }
+  }
+  return flow;
 }
 
 function normalizeTools(rawTools: unknown[], catalog: ToolCatalog, gaps: PlanGap[]): PlannedTool[] {

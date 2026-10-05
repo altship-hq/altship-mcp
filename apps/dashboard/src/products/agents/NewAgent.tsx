@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, navigate } from "../../router.js";
 import { PageHead } from "../../ui.js";
+import FlowEditor from "./FlowEditor.js";
+import { useHistory } from "./useHistory.js";
 import {
   approvePlan,
+  blankPlan,
   getCatalog,
+  planToolCount,
   proposePlan,
+  withFlow,
   type AgentModel,
   type AgentPlan,
   type Catalog,
@@ -36,7 +41,10 @@ export default function NewAgent() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [plan, setPlan] = useState<AgentPlan | null>(null);
+  // The plan being reviewed, with undo and redo. Null until there is one.
+  const history = useHistory<AgentPlan | null>(null);
+  const plan = history.value;
+  const setPlan = (next: AgentPlan) => history.set(next, sameKindOfEdit);
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState<null | "planning" | "approving">(null);
   const [error, setError] = useState<string | null>(null);
@@ -74,9 +82,12 @@ export default function NewAgent() {
         description: description.trim(),
         focusDeploymentId,
         ...toolChoice,
-        ...(revise && plan ? { previousPlan: plan, feedback: feedback.trim() } : {}),
+        // The planner works from the agents; the flow is laid out again from its answer.
+        ...(revise && plan ? { previousPlan: { ...plan, flowGraph: undefined }, feedback: feedback.trim() } : {}),
       });
-      setPlan(result.plan);
+      // A first proposal starts the history; a re-plan is a step you can undo.
+      if (revise && plan) history.set(withFlow(result.plan));
+      else history.reset(withFlow(result.plan));
       setFeedback("");
       window.scrollTo(0, 0);
     } catch (err) {
@@ -96,11 +107,8 @@ export default function NewAgent() {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(null);
+      window.scrollTo(0, 0);
     }
-  }
-
-  function updateAgent(key: string, patch: Partial<PlannedAgent>) {
-    setPlan((p) => p && { ...p, agents: p.agents.map((a) => (a.key === key ? { ...a, ...patch } : a)) });
   }
 
   if (!plan) {
@@ -108,7 +116,7 @@ export default function NewAgent() {
       <>
         <PageHead
           title="New agent"
-          description="Name your agent and describe what it should do. We'll propose the tools and flow for you to review — nothing is created until you approve."
+          description="Name your agent and describe what it should do. We'll propose the tools and flow for you to review and change, or you can build the flow yourself. Nothing is created until you approve."
         />
         {error && <div className="notice">{error}</div>}
         <div className="agent-form">
@@ -149,6 +157,16 @@ export default function NewAgent() {
             >
               {busy === "planning" ? "Designing your agent…" : "Propose a plan"}
             </button>
+            <button
+              className="secondary"
+              disabled={busy !== null || !name.trim()}
+              onClick={() => {
+                setError(null);
+                history.reset(blankPlan(name.trim(), description.trim()));
+              }}
+            >
+              Build the flow myself
+            </button>
             {busy === "planning" && <span className="hint">This takes up to a minute.</span>}
           </div>
         </div>
@@ -156,40 +174,33 @@ export default function NewAgent() {
     );
   }
 
-  const toolCount = plan.agents.reduce((n, a) => n + toolCountOf(a), 0);
+  const toolCount = planToolCount(plan);
 
   return (
     <>
       <PageHead
-        title="Review the plan"
-        description="Adjust anything below, then approve. Tools marked “Ask” pause for your approval every time they run."
+        title="Review the flow"
+        description="Add, change, connect or delete steps, then approve. Tools marked “Ask” pause for your approval every time they run."
       />
       {error && <div className="notice">{error}</div>}
 
-      <div className="builder">
+      <div className="builder flow-builder">
         <section className="select-step">
           <div className="plan-name">
             <label htmlFor="plan-name">Agent name</label>
             <input id="plan-name" value={plan.name} onChange={(e) => setPlan({ ...plan, name: e.target.value })} />
-            <p className="subtitle">
-              {plan.flow === "single"
-                ? "A single agent handles everything."
-                : `A coordinator delegates to ${plan.agents.length - 1} specialist${plan.agents.length === 2 ? "" : "s"}.`}
-            </p>
           </div>
 
-          <div className="agent-cards">
-            {plan.agents.map((agent) => (
-              <AgentCard
-                key={agent.key}
-                agent={agent}
-                team={plan.flow === "team"}
-                servers={servers}
-                allowedBuiltins={toolChoice.builtinTools}
-                onChange={(patch) => updateAgent(agent.key, patch)}
-              />
-            ))}
-          </div>
+          <FlowEditor
+            plan={plan}
+            onChange={setPlan}
+            servers={servers}
+            allowedBuiltins={toolChoice.builtinTools}
+            history={history}
+            renderAgent={(agent, onChange) => (
+              <AgentCard agent={agent} team servers={servers} allowedBuiltins={toolChoice.builtinTools} onChange={onChange} />
+            )}
+          />
 
           {plan.gaps.length > 0 && (
             <div className="plan-panel warn">
@@ -207,6 +218,8 @@ export default function NewAgent() {
             </div>
           )}
 
+          {/* Re-planning needs a description to plan from; a flow built by hand may not have one. */}
+          {description.trim() && (
           <div className="plan-panel">
             <h3>{plan.assumptions.length > 0 ? "Assumptions to confirm" : "Anything to change?"}</h3>
             {plan.assumptions.length > 0 && (
@@ -225,7 +238,9 @@ export default function NewAgent() {
             <button className="link" disabled={busy !== null || !feedback.trim()} onClick={() => runPlanner(true)}>
               {busy === "planning" ? "Re-planning…" : "Re-plan with this feedback"}
             </button>
+            <p className="hint">Re-planning replaces the flow above, including changes you've made to it. Undo brings it back.</p>
           </div>
+          )}
 
           {plan.testPrompts.length > 0 && (
             <div className="plan-panel">
@@ -239,7 +254,7 @@ export default function NewAgent() {
           )}
 
           <div className="action-bar">
-            <button className="secondary" disabled={busy !== null} onClick={() => setPlan(null)}>
+            <button className="secondary" disabled={busy !== null} onClick={() => history.reset(null)}>
               ← Back
             </button>
             <span className="tool-count">
@@ -253,6 +268,22 @@ export default function NewAgent() {
       </div>
     </>
   );
+}
+
+/**
+ * Whether two versions of a plan differ only in details (text, settings, a
+ * step's position), not in what steps and connections exist. A run of such
+ * edits made in quick succession is one undo step; adding or removing
+ * something always gets its own.
+ */
+function sameKindOfEdit(previous: AgentPlan | null, next: AgentPlan | null): boolean {
+  const shape = (p: AgentPlan | null) => {
+    const flow = p?.flowGraph;
+    const routes = (flow?.nodes ?? []).reduce((n, node) => n + (node.routes?.length ?? 0), 0);
+    const tools = (p?.agents ?? []).reduce((n, a) => n + toolCountOf(a), 0);
+    return `${p?.agents.length}|${flow?.nodes.length}|${flow?.edges.length}|${routes}|${tools}`;
+  };
+  return previous !== null && next !== null && shape(previous) === shape(next);
 }
 
 /** Which tools the agent may use: built-in ones (no MCP server needed) and any of your MCP servers. */

@@ -50,11 +50,46 @@ export interface PlannedAgent {
   builtinTools?: PlannedBuiltinTool[];
 }
 
+/** A step in an execution flow (packages/agent-design FlowNode). */
+export interface FlowNode {
+  id: string;
+  type: "input" | "output" | "agent" | "router" | "tool";
+  position: { x: number; y: number };
+  /** agent: which of the plan's agents this step hands work to. */
+  agentKey?: string;
+  /** router, tool: the step's name. */
+  label?: string;
+  /** router: how to choose a route. */
+  rule?: string;
+  routes?: { id: string; label: string }[];
+  /** tool: the tool this step calls (one of the two). */
+  tool?: PlannedTool;
+  builtinTool?: PlannedBuiltinTool;
+}
+
+export interface FlowEdge {
+  id: string;
+  source: string;
+  target: string;
+  /** From a router: which route this connection is for. */
+  route?: string;
+}
+
+/** The execution flow drawn on the canvas. A coordinator (`runner`) follows it and hands work to its agents. */
+export interface AgentFlow {
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+  runner: { model: AgentModel; instructions: string };
+}
+
 export interface AgentPlan {
   name: string;
   description: string;
   flow: "single" | "team";
+  /** With a flowGraph: the agents its steps use. */
   agents: PlannedAgent[];
+  /** Missing on agents created before flows existed. */
+  flowGraph?: AgentFlow;
   gaps: { capability: string; suggestion: string }[];
   assumptions: string[];
   testPrompts: string[];
@@ -146,6 +181,103 @@ export function approvePlan(plan: AgentPlan, tools: ToolChoice): Promise<AgentRe
 }
 
 /** Every tool an agent can use (MCP and built-in), e.g. for counts. */
+export function newId(prefix: string): string {
+  return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+const COLUMN = 250;
+const ROW = 130;
+
+/** A plan with nothing in it but an Input and an Output, for building a flow from scratch. */
+export function blankPlan(name: string, description: string): AgentPlan {
+  return {
+    name,
+    description,
+    flow: "single",
+    agents: [],
+    gaps: [],
+    assumptions: [],
+    testPrompts: [],
+    flowGraph: {
+      nodes: [
+        { id: "input", type: "input", position: { x: 0, y: 0 } },
+        { id: "output", type: "output", position: { x: COLUMN * 2, y: 0 } },
+      ],
+      edges: [],
+      runner: { model: "claude-opus-5", instructions: "" },
+    },
+  };
+}
+
+/**
+ * Lays a plan out as a flow so it can be edited on the canvas. A single agent
+ * becomes Input → agent → Output. A team becomes Input → a router that picks a
+ * specialist → Output, since that's what its coordinator does; the
+ * coordinator's own instructions become the flow's guidance. A coordinator
+ * that has tools of its own stays as a first step, so they aren't lost.
+ * Plans that already have a flow are returned unchanged.
+ */
+export function withFlow(plan: AgentPlan): AgentPlan {
+  if (plan.flowGraph) return plan;
+  const coordinator = plan.agents.find((a) => a.role === "coordinator");
+  const edge = (source: string, target: string, route?: string): FlowEdge => ({ id: newId("e"), source, target, ...(route ? { route } : {}) });
+
+  if (!coordinator || plan.agents.length === 1) {
+    const agent = plan.agents[0];
+    return {
+      ...plan,
+      agents: [{ ...agent, role: "specialist" }],
+      flowGraph: {
+        nodes: [
+          { id: "input", type: "input", position: { x: 0, y: 0 } },
+          { id: "step-1", type: "agent", agentKey: agent.key, position: { x: COLUMN, y: 0 } },
+          { id: "output", type: "output", position: { x: COLUMN * 2, y: 0 } },
+        ],
+        edges: [edge("input", "step-1"), edge("step-1", "output")],
+        runner: { model: agent.model, instructions: "" },
+      },
+    };
+  }
+
+  const specialists = plan.agents.filter((a) => a !== coordinator);
+  const keepsCoordinator = toolCountOf(coordinator) > 0;
+  const first = keepsCoordinator ? 1 : 0;
+  const top = (-(specialists.length - 1) * ROW) / 2;
+  const routes = specialists.map((s, i) => ({ id: `route-${i + 1}`, label: s.description || s.name }));
+  const nodes: FlowNode[] = [
+    { id: "input", type: "input", position: { x: 0, y: 0 } },
+    ...(keepsCoordinator ? [{ id: "coordinator", type: "agent" as const, agentKey: coordinator.key, position: { x: COLUMN, y: 0 } }] : []),
+    {
+      id: "router",
+      type: "router",
+      label: "Choose a specialist",
+      rule: "Pick the specialist whose strengths best match the request.",
+      routes,
+      position: { x: COLUMN * (first + 1), y: 0 },
+    },
+    ...specialists.map((s, i) => ({ id: `step-${i + 1}`, type: "agent" as const, agentKey: s.key, position: { x: COLUMN * (first + 2), y: top + i * ROW } })),
+    { id: "output", type: "output", position: { x: COLUMN * (first + 3), y: 0 } },
+  ];
+  return {
+    ...plan,
+    agents: [...(keepsCoordinator ? [coordinator] : []), ...specialists].map((a) => ({ ...a, role: "specialist" as const })),
+    flowGraph: {
+      nodes,
+      edges: [
+        ...(keepsCoordinator ? [edge("input", "coordinator"), edge("coordinator", "router")] : [edge("input", "router")]),
+        ...specialists.flatMap((_, i) => [edge("router", `step-${i + 1}`, `route-${i + 1}`), edge(`step-${i + 1}`, "output")]),
+      ],
+      runner: { model: coordinator.model, instructions: keepsCoordinator ? "" : coordinator.instructions },
+    },
+  };
+}
+
+/** Every tool a plan uses: its agents' tools plus its flow's tool steps. */
+export function planToolCount(plan: AgentPlan): number {
+  const steps = (plan.flowGraph?.nodes ?? []).filter((n) => n.type === "tool").length;
+  return plan.agents.reduce((n, a) => n + toolCountOf(a), 0) + steps;
+}
+
 export function toolCountOf(agent: PlannedAgent): number {
   return agent.tools.length + (agent.builtinTools?.length ?? 0);
 }
@@ -240,7 +372,9 @@ export function endpointUrl(id: string): string {
   return `${base}/api/agents/${id}/run`;
 }
 
-export function flowLabel(agent: { plan: { agents: unknown[] } }): string {
+export function flowLabel(agent: { plan: { agents: unknown[]; flowGraph?: AgentFlow } }): string {
   const n = agent.plan.agents.length;
-  return n === 1 ? "Single agent" : `Team of ${n}`;
+  const steps = agent.plan.flowGraph?.nodes.filter((node) => node.type !== "input" && node.type !== "output").length;
+  if (steps !== undefined && steps > 1) return `Flow of ${steps} steps`;
+  return n <= 1 ? "Single agent" : `Team of ${n}`;
 }

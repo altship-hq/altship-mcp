@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
-import { BUILTIN_TOOLS, PlanError, validatePlan, type AgentPlan, type BuiltinTool } from "@altship/agent-design";
+import { BUILTIN_TOOLS, PlanError, compileFlow, validatePlan, type AgentPlan, type BuiltinTool } from "@altship/agent-design";
 import { AgentConfigError } from "./anthropic.js";
 import { loadCatalog, serversUsedBy, toToolCatalog, type CatalogEntry } from "./catalog.js";
 import { planAgent, PlannerError } from "./planner.js";
@@ -81,11 +81,14 @@ agentsRouter.post("/", async (req, res) => {
   const { servers, allowedBuiltins } = await chosenTools(req);
   const catalog = toToolCatalog(servers);
   const plan = validatePlan(req.body?.plan, catalog, { allowedBuiltins });
+  // A plan with an execution flow runs as a coordinator following that flow;
+  // the plan as the user designed it is what's saved.
+  const runnable = compileFlow(plan);
 
-  const { coordinator, specialists } = await createManagedAgents(plan, catalog);
+  const { coordinator, specialists } = await createManagedAgents(runnable, catalog);
   const id = `agt_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
   // A vault only when the agent calls MCP servers (it holds their access keys).
-  const used = serversUsedBy(plan, servers);
+  const used = serversUsedBy(runnable, servers);
   const vaultId = used.length > 0 ? await createAgentVault(id, used) : null;
   const record = await insertAgent({
     id,
@@ -234,7 +237,7 @@ async function runResponse(sessionId: string, tracker: Awaited<ReturnType<typeof
 /** Agents created before access keys existed get their vault on first use. */
 async function withVault(agent: AgentRecord): Promise<AgentRecord> {
   if (agent.vaultId) return agent;
-  const used = serversUsedBy(agent.plan, (await loadCatalog(agent.userId)).servers);
+  const used = serversUsedBy(compileFlow(agent.plan), (await loadCatalog(agent.userId)).servers);
   if (used.length === 0) return agent; // no MCP servers: nothing to authorize
   const vaultId = await createAgentVault(agent.id, used);
   await setAgentVault(agent.id, vaultId);

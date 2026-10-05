@@ -684,3 +684,297 @@
   font-size: 12px;
   line-height: 1.4;
 }
+
+/* ---- Execution flow (canvas) ------------------------------------------- */
+
+.dash .builder.flow-builder {
+  max-width: none;
+}
+
+.dash .flow-builder .plan-name,
+.dash .flow-builder .plan-panel,
+.dash .flow-builder .action-bar {
+  max-width: 760px;
+}
+
+/* The canvas needs more room than the rest of the dashboard's pages. */
+.dash .content:has(.flow-editor) {
+  max-width: 1480px;
+}
+
+.dash .flow-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 330px;
+  gap: 12px;
+  align-items: start;
+  margin-bottom: 8px;
+}
+
+.dash .flow-editor.is-readonly {
+  display: block;
+}
+
+.dash .flow-canvas {
+  height: 560px;
+  border: 1px solid #e0e0e0;
+  background: #fafafa;
+}
+
+.dash .flow-editor.is-readonly .flow-canvas {
+  height: 460px;
+}
+
+.dash .flow-inspector {
+  padding: 14px;
+  border: 1px solid #e0e0e0;
+  background: #fff;
+}
+
+/* Steps to add, as a toolbar above the canvas */
+.dash .flow-palette {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.dash .flow-palette h3 {
+  margin: 0 4px 0 0;
+}
+
+/* Undo and redo, at the right end of the toolbar */
+.dash .flow-history {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.dash .builder .flow-history .flow-palette-item {
+  display: flex;
+  align-items: center;
+  padding: 7px 9px;
+  cursor: pointer;
+}
+
+.dash .builder .flow-history .flow-palette-item:disabled {
+  color: #b5b5b5;
+  border-color: #e4e4e4;
+  cursor: default;
+}
+
+.dash .flow-palette .flow-help {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.dash .flow-inspector {
+  max-height: 560px;
+  overflow-y: auto;
+}
+
+.dash .flow-editor h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.dash .builder .flow-palette-item {
+  margin: 0;
+  padding: 7px 12px;
+  text-align: left;
+  color: #111;
+  background: #fff;
+  border: 1px solid #d4d4d4;
+  border-radius: 2px;
+  cursor: grab;
+}
+
+.dash .builder .flow-palette-item:hover {
+  border-color: #111;
+}
+
+.dash .flow-palette-item strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.dash .flow-help {
+  font-size: 11px;
+  line-height: 1.5;
+  color: #777;
+}
+
+.dash .flow-help {
+  margin: 8px 0 12px;
+}
+
+.dash .flow-inspector label,
+.dash .flow-route-list > span {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 11px;
+  color: #555;
+}
+
+.dash .builder .flow-inspector label input,
+.dash .builder .flow-inspector label select,
+.dash .builder .flow-inspector label textarea {
+  display: block;
+  width: 100%;
+  margin: 6px 0 0;
+}
+
+.dash .flow-inspector label small {
+  display: block;
+  margin-top: 4px;
+  color: #777;
+}
+
+.dash .flow-inspector-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.dash .flow-inspector .agent-card {
+  padding: 0;
+  border: 0;
+}
+
+.dash .flow-route-list > span {
+  margin-bottom: 6px;
+}
+
+.dash .flow-route-edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.dash .builder .flow-route-edit input {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+/* Text-style delete actions, which would otherwise pick up the builder's button style */
+.dash .builder .flow-editor .link-danger {
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  color: #a3231f;
+  background: none;
+  border: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.dash .builder .flow-editor .flow-remove-edge {
+  margin-top: 8px;
+}
+
+/* Steps on the canvas */
+.dash .flow-step {
+  min-width: 170px;
+  max-width: 230px;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid #cfcfcf;
+  border-radius: 2px;
+  font-size: 12px;
+}
+
+.dash .flow-step.is-selected {
+  border-color: #111;
+  box-shadow: 0 0 0 1px #111;
+}
+
+.dash .flow-step.flow-input,
+.dash .flow-step.flow-output {
+  background: #f3f3f3;
+}
+
+.dash .flow-step-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dash .flow-step-head strong {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash .flow-step-sub {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #777;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.dash .flow-routes {
+  margin: 8px -12px -4px;
+  border-top: 1px solid #ececec;
+}
+
+.dash .flow-route {
+  position: relative;
+  padding: 5px 16px 5px 12px;
+  font-size: 11px;
+  text-align: right;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The zoom buttons, which would otherwise pick up the builder's button style */
+.dash .builder .flow-canvas .react-flow__controls button {
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  padding: 5px;
+  color: #111;
+  background: #fff;
+  border: 0;
+  border-bottom: 1px solid #e0e0e0;
+  border-radius: 0;
+}
+
+.dash .flow-canvas .react-flow__controls {
+  border: 1px solid #d4d4d4;
+  box-shadow: none;
+}
+
+.dash .flow-canvas .react-flow__handle {
+  width: 9px;
+  height: 9px;
+  background: #111;
+  border: 2px solid #fff;
+}
+
+.dash .flow-canvas .react-flow__edge-path {
+  stroke: #8a8a8a;
+  stroke-width: 1.5;
+}
+
+.dash .flow-canvas .react-flow__edge.selected .react-flow__edge-path {
+  stroke: #111;
+  stroke-width: 2;
+}
+
+@media (max-width: 1000px) {
+  .dash .flow-editor {
+    grid-template-columns: 1fr;
+  }
+}

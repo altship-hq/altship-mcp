@@ -5,13 +5,13 @@ import { flowLabel, listAgents, type AgentRecord, toolCountOf } from "./api.js";
 import NewAgent from "./NewAgent.js";
 import AgentDetail from "./AgentDetail.js";
 
-// Agent Creator's pages: /agents, /agents/new, /agents/<id>[/deploy|/runs].
+// Agent Creator's pages: /agents, /agents/new, /agents/<id>[/flow|/deploy|/runs].
 
 export default function AgentsProduct({ subpath }: { subpath: string }) {
   if (subpath === "new") return <NewAgent />;
   if (subpath.startsWith("agt_")) {
     const [id, tab] = subpath.split("/");
-    return <AgentDetail id={id} tab={tab === "deploy" || tab === "runs" ? tab : "playground"} />;
+    return <AgentDetail id={id} tab={tab === "deploy" || tab === "runs" || tab === "flow" ? tab : "playground"} />;
   }
   return <Overview />;
 }

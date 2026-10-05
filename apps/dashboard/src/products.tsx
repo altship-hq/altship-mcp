@@ -58,9 +58,9 @@ export const PRODUCTS: Product[] = [
       { path: "new", label: "New agent" },
     ],
     dynamicPage: (subpath) => {
-      const match = subpath.match(/^agt_[a-z0-9]+(?:\/(deploy|runs))?$/);
+      const match = subpath.match(/^agt_[a-z0-9]+(?:\/(flow|deploy|runs))?$/);
       if (!match) return null;
-      return { path: subpath, label: match[1] === "deploy" ? "Deploy" : match[1] === "runs" ? "Runs" : "Playground" };
+      return { path: subpath, label: match[1] === "deploy" ? "Deploy" : match[1] === "runs" ? "Runs" : match[1] === "flow" ? "Flow" : "Playground" };
     },
   },
   {
