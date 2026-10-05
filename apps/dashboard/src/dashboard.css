@@ -1275,6 +1275,21 @@
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
 }
 
+/* A larger panel, for something to browse (all the apps) rather than a question */
+.dash .modal.modal-wide {
+  display: flex;
+  flex-direction: column;
+  max-width: 760px;
+  max-height: min(680px, calc(100vh - 48px));
+}
+
+.dash .modal-note {
+  margin-right: auto;
+  align-self: center;
+  font-size: 12px;
+  color: #595959;
+}
+
 .dash .modal h2 {
   margin: 0 0 10px;
   font-size: 17px;

@@ -1,51 +1,158 @@
 import { useEffect, useRef, useState } from "react";
+import { Modal } from "../../ui.js";
 import { connectApp, disconnectApp, listApps, type AppInfo } from "./api.js";
 
-/**
- * The connected-apps part of the tool picker: third-party apps (Gmail,
- * Slack, ...) the agent can use on the user's behalf. An app has to be
- * connected (the user signs in to it, in a new tab) before it can be ticked.
- * Renders nothing when connected apps aren't set up on this altship.
- */
+// The connected-apps part of the tool picker: third-party apps (Gmail,
+// Slack, ...) an agent can use on the user's behalf. An app has to be
+// connected (the user signs in to it, in a new tab) before it can be ticked.
+// The form shows a short list; "See all apps" opens the rest in a modal.
+
+/** How many apps the form shows before "See all apps" (more, if the user has connected more). */
+const INLINE_COUNT = 6;
+
+/** One app: a checkbox once it's connected, a Connect button until then. */
+function AppRow({
+  app,
+  picked,
+  busy,
+  onToggle,
+  onConnect,
+  onDisconnect,
+}: {
+  app: AppInfo;
+  picked: boolean;
+  busy: boolean;
+  onToggle: (on: boolean) => void;
+  onConnect: () => void;
+  onDisconnect: () => void;
+}) {
+  if (!app.connected) {
+    return (
+      <div className="tool-choice app-unconnected">
+        {app.logo && <img src={app.logo} alt="" width="18" height="18" />}
+        <span>
+          <strong>{app.name}</strong>
+          <small>Not connected</small>
+        </span>
+        <button type="button" className="secondary" disabled={busy} onClick={onConnect}>
+          {busy ? "Opening…" : "Connect"}
+        </button>
+      </div>
+    );
+  }
+  return (
+    <label className="tool-choice">
+      <input type="checkbox" checked={picked} onChange={(e) => onToggle(e.target.checked)} />
+      {app.logo && <img src={app.logo} alt="" width="18" height="18" />}
+      <span>
+        <strong>{app.name}</strong>
+        <small>
+          Connected ·{" "}
+          <button
+            type="button"
+            className="link"
+            disabled={busy}
+            onClick={(e) => {
+              e.preventDefault();
+              onDisconnect();
+            }}
+          >
+            Disconnect
+          </button>
+        </small>
+      </span>
+    </label>
+  );
+}
+
+/** Renders nothing when connected apps aren't set up on this altship. */
 export default function AppsPicker({ picked, onToggle }: { picked: Set<string>; onToggle: (slug: string, on: boolean) => void }) {
   const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [apps, setApps] = useState<AppInfo[]>([]);
-  const [search, setSearch] = useState("");
+  // For the form: the user's connected apps, and the first page of all apps to suggest from.
+  const [connected, setConnected] = useState<AppInfo[]>([]);
+  const [suggested, setSuggested] = useState<AppInfo[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // The app whose sign-in tab is open, so coming back to this tab can tick it.
   const connecting = useRef<string | null>(null);
-  const latest = useRef(0);
 
-  async function load(query: string) {
-    const request = ++latest.current;
+  // The "all apps" modal: what's listed there, and whether there's more to load.
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [all, setAll] = useState<AppInfo[] | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const latestSearch = useRef(0);
+  const searchField = useRef<HTMLInputElement>(null);
+
+  async function loadForm() {
     try {
-      const result = await listApps(query);
-      if (request !== latest.current) return; // a newer search has started
-      setEnabled(result.enabled);
-      setApps(result.apps);
+      const [mine, first] = await Promise.all([listApps({ connected: true }), listApps()]);
+      setEnabled(first.enabled);
+      setConnected(mine.apps);
+      setSuggested(first.apps);
       const justConnected = connecting.current;
-      if (justConnected && result.apps.some((a) => a.slug === justConnected && a.connected)) {
+      if (justConnected && mine.apps.some((a) => a.slug === justConnected)) {
         connecting.current = null;
         onToggle(justConnected, true);
       }
     } catch (err) {
-      if (request === latest.current) setError(err instanceof Error ? err.message : String(err));
+      setError(err instanceof Error ? err.message : String(err));
     }
   }
 
-  // Search as the user types, after a short pause.
+  async function loadAll(query: string) {
+    const request = ++latestSearch.current;
+    try {
+      const page = await listApps({ search: query || undefined });
+      if (request !== latestSearch.current) return; // a newer search has started
+      setAll(page.apps);
+      setNextCursor(page.nextCursor);
+    } catch (err) {
+      if (request === latestSearch.current) setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function loadMore() {
+    if (!nextCursor) return;
+    setLoadingMore(true);
+    try {
+      const page = await listApps({ search: search.trim() || undefined, cursor: nextCursor });
+      setAll((current) => {
+        const seen = new Set((current ?? []).map((a) => a.slug));
+        return [...(current ?? []), ...page.apps.filter((a) => !seen.has(a.slug))];
+      });
+      setNextCursor(page.nextCursor);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+    setLoadingMore(false);
+  }
+
   useEffect(() => {
-    const timer = setTimeout(() => load(search.trim()), search ? 300 : 0);
+    loadForm();
+  }, []);
+
+  // In the modal: search as the user types, after a short pause.
+  useEffect(() => {
+    if (!open) return;
+    const timer = setTimeout(() => loadAll(search.trim()), search ? 300 : 0);
     return () => clearTimeout(timer);
-  }, [search]);
+  }, [open, search]);
+
+  useEffect(() => {
+    if (open) searchField.current?.focus();
+  }, [open]);
 
   // Signing in happens in another tab: check again when this one is back in front.
   useEffect(() => {
-    const onFocus = () => load(search.trim());
+    const onFocus = () => {
+      loadForm();
+      if (open) loadAll(search.trim());
+    };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [search]);
+  }, [open, search]);
 
   async function connect(app: AppInfo) {
     setBusy(app.slug);
@@ -71,7 +178,7 @@ export default function AppsPicker({ picked, onToggle }: { picked: Set<string>; 
     try {
       await disconnectApp(app.slug);
       onToggle(app.slug, false);
-      await load(search.trim());
+      await Promise.all([loadForm(), open ? loadAll(search.trim()) : Promise.resolve()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -80,6 +187,23 @@ export default function AppsPicker({ picked, onToggle }: { picked: Set<string>; 
 
   if (enabled === false) return null;
 
+  // Everything the user has connected, then widely used apps to fill the list out.
+  const connectedSlugs = new Set(connected.map((a) => a.slug));
+  const inline = [...connected, ...suggested.filter((a) => !connectedSlugs.has(a.slug)).slice(0, Math.max(INLINE_COUNT - connected.length, 0))];
+  // A row in the modal reflects a connection made since its list loaded.
+  const current = (app: AppInfo) => (connectedSlugs.has(app.slug) ? { ...app, connected: true } : app);
+  const row = (app: AppInfo) => (
+    <AppRow
+      key={app.slug}
+      app={app}
+      picked={picked.has(app.slug)}
+      busy={busy === app.slug}
+      onToggle={(on) => onToggle(app.slug, on)}
+      onConnect={() => connect(app)}
+      onDisconnect={() => disconnect(app)}
+    />
+  );
+
   return (
     <>
       <div className="tool-picker-label">Connected apps</div>
@@ -87,58 +211,55 @@ export default function AppsPicker({ picked, onToggle }: { picked: Set<string>; 
         Apps the agent can act in for you, like sending an email or posting a message. Connect one by signing in to it, then tick it
         for this agent.
       </p>
-      {error && <div className="notice">{error}</div>}
-      <input
-        type="search"
-        className="apps-search"
-        placeholder="Search apps, e.g. Gmail, Slack, Notion"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        aria-label="Search apps"
-      />
+      {error && !open && <div className="notice">{error}</div>}
       {enabled === null ? (
         <p className="hint">Loading apps…</p>
-      ) : apps.length === 0 ? (
-        <p className="hint">No apps match "{search}".</p>
       ) : (
-        <div className="tool-picker-group apps-list">
-          {apps.map((app) =>
-            app.connected ? (
-              <label key={app.slug} className="tool-choice">
-                <input type="checkbox" checked={picked.has(app.slug)} onChange={(e) => onToggle(app.slug, e.target.checked)} />
-                {app.logo && <img src={app.logo} alt="" width="18" height="18" />}
-                <span>
-                  <strong>{app.name}</strong>
-                  <small>
-                    Connected ·{" "}
-                    <button
-                      type="button"
-                      className="link"
-                      disabled={busy === app.slug}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        disconnect(app);
-                      }}
-                    >
-                      Disconnect
-                    </button>
-                  </small>
-                </span>
-              </label>
+        <>
+          <div className="tool-picker-group apps-list">{inline.map(row)}</div>
+          <button type="button" className="secondary apps-more" onClick={() => setOpen(true)}>
+            See all apps
+          </button>
+        </>
+      )}
+
+      {open && (
+        <Modal title="Connected apps" wide onClose={() => setOpen(false)}>
+          <input
+            ref={searchField}
+            type="search"
+            className="apps-search"
+            placeholder="Search apps, e.g. Gmail, Slack, Notion"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            aria-label="Search apps"
+          />
+          {error && <div className="notice">{error}</div>}
+          <div className="apps-modal-list">
+            {all === null ? (
+              <p className="hint">Loading apps…</p>
+            ) : all.length === 0 ? (
+              <p className="hint">No apps match "{search}".</p>
             ) : (
-              <div key={app.slug} className="tool-choice app-unconnected">
-                {app.logo && <img src={app.logo} alt="" width="18" height="18" />}
-                <span>
-                  <strong>{app.name}</strong>
-                  <small>Not connected</small>
-                </span>
-                <button type="button" className="secondary" disabled={busy === app.slug} onClick={() => connect(app)}>
-                  {busy === app.slug ? "Opening…" : "Connect"}
-                </button>
-              </div>
-            ),
-          )}
-        </div>
+              <>
+                <div className="tool-picker-group apps-list">{all.map((app) => row(current(app)))}</div>
+                {nextCursor && (
+                  <button type="button" className="secondary apps-more" disabled={loadingMore} onClick={loadMore}>
+                    {loadingMore ? "Loading…" : "Load more"}
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+          <div className="modal-actions">
+            <span className="modal-note">
+              {picked.size === 0 ? "No apps ticked for this agent." : `${picked.size} app${picked.size === 1 ? "" : "s"} ticked for this agent.`}
+            </span>
+            <button type="button" className="modal-cancel" onClick={() => setOpen(false)}>
+              Done
+            </button>
+          </div>
+        </Modal>
       )}
     </>
   );

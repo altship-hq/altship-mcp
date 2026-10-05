@@ -763,8 +763,37 @@
 
 /* Connected apps in the tool picker */
 .dash .agent-form .apps-search {
-  max-width: 320px;
-  margin: 0 0 10px;
+  margin: 0 0 12px;
+}
+
+/* "See all apps" under the short list, and "Load more" in the modal */
+.dash .agent-form button.apps-more {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 12px;
+  color: #111;
+  background: #fff;
+  border: 1px solid #cfcfcf;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.dash .agent-form button.apps-more:hover:not(:disabled) {
+  border-color: #111;
+}
+
+/* The list inside the all-apps modal scrolls; the search and Done stay put */
+.dash .apps-modal-list {
+  flex: 1;
+  min-height: 160px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.dash .apps-modal-list .apps-more {
+  display: block;
+  margin: 12px auto 4px;
 }
 
 .dash .tool-choice img {

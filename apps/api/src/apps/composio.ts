@@ -113,16 +113,24 @@ export async function sessionMcp(sessionId: string): Promise<{ url: string; head
 
 // ---- Apps ----------------------------------------------------------------
 
-/** Apps the user can connect, with whether they have. `search` narrows by name. */
-export async function listApps(userId: string, options: { search?: string; connectedOnly?: boolean } = {}): Promise<AppInfo[]> {
+/**
+ * Apps the user can connect, with whether they have: one page of them, in the
+ * provider's order (widely used apps first). `search` narrows by name;
+ * `cursor` (a previous page's `nextCursor`) continues the list.
+ */
+export async function listApps(
+  userId: string,
+  options: { search?: string; connectedOnly?: boolean; cursor?: string } = {},
+): Promise<{ apps: AppInfo[]; nextCursor: string | null }> {
   const session = await browseSession(userId);
   const page = await session.toolkits({
     limit: 50,
     ...(options.search ? { search: options.search } : {}),
     ...(options.connectedOnly ? { isConnected: true } : {}),
+    ...(options.cursor ? { cursor: options.cursor } : {}),
   });
   // Composio's own helper toolkits ("composio", "composio_search") aren't apps a user would recognise.
-  return page.items
+  const apps = page.items
     .filter((item) => !item.slug.startsWith("composio"))
     .map((item) => ({
       slug: item.slug,
@@ -130,6 +138,7 @@ export async function listApps(userId: string, options: { search?: string; conne
       logo: item.logo ?? null,
       connected: item.isNoAuth || item.connection?.isActive === true,
     }));
+  return { apps, nextCursor: page.cursor ?? null };
 }
 
 /** The page where the user signs in to an app. They're sent to `callbackUrl` afterwards. */

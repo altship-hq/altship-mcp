@@ -72,12 +72,16 @@ appsRouter.all("/mcp/:sessionId", async (req, res) => {
 
 appsRouter.use(requireAuth);
 
-// The apps a user can connect and whether they have. `enabled` is false when
-// altship has no app provider configured, so the dashboard can hide the feature.
+// A page of the apps a user can connect, and whether they have (`search`
+// narrows, `connected=true` lists only theirs, `cursor` continues). `enabled`
+// is false when altship has no app provider configured, so the dashboard can
+// hide the feature.
 appsRouter.get("/", async (req, res) => {
-  if (!appsEnabled()) return res.json({ enabled: false, apps: [] });
+  if (!appsEnabled()) return res.json({ enabled: false, apps: [], nextCursor: null });
   const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 80) : "";
-  res.json({ enabled: true, apps: await listApps(userIdOf(req), { search: search || undefined, connectedOnly: req.query.connected === "true" }) });
+  const cursor = typeof req.query.cursor === "string" ? req.query.cursor.slice(0, 500) : "";
+  const page = await listApps(userIdOf(req), { search: search || undefined, connectedOnly: req.query.connected === "true", cursor: cursor || undefined });
+  res.json({ enabled: true, ...page });
 });
 
 // Starts signing in to an app: returns the page to send the user to.

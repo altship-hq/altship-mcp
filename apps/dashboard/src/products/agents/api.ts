@@ -172,9 +172,19 @@ export interface AppInfo {
   connected: boolean;
 }
 
-/** `enabled` is false when connected apps aren't set up on this altship. */
-export function listApps(search = ""): Promise<{ enabled: boolean; apps: AppInfo[] }> {
-  return getJson(`/api/apps${search ? `?search=${encodeURIComponent(search)}` : ""}`);
+/**
+ * A page of apps, widely used ones first. `search` narrows by name,
+ * `connected` lists only the user's, and `cursor` (a previous page's
+ * `nextCursor`) continues. `enabled` is false when connected apps aren't set
+ * up on this altship.
+ */
+export function listApps(options: { search?: string; connected?: boolean; cursor?: string } = {}): Promise<{ enabled: boolean; apps: AppInfo[]; nextCursor: string | null }> {
+  const params = new URLSearchParams();
+  if (options.search) params.set("search", options.search);
+  if (options.connected) params.set("connected", "true");
+  if (options.cursor) params.set("cursor", options.cursor);
+  const query = params.toString();
+  return getJson(`/api/apps${query ? `?${query}` : ""}`);
 }
 
 /** Starts signing in to an app: resolves to the page to open. */
