@@ -463,6 +463,7 @@ app.get("/api/logs", async (req, res) => {
       errorType: call.errorType,
       httpStatus: call.httpStatus,
       durationMs: call.durationMs,
+      traceId: call.traceId,
       caller: { kind: call.callerKind, id: call.callerId, label: callerLabel(call) },
     })),
     nextBefore: rows.length > limit ? calls[calls.length - 1].startedAt : null,

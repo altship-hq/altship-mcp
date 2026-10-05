@@ -454,6 +454,8 @@ export interface ToolCallRecord {
   durationMs: number;
   callerKind: string;
   callerId: string | null;
+  /** The OpenTelemetry trace the server exported the call as. */
+  traceId: string | null;
 }
 
 interface ToolCallRow {
@@ -467,11 +469,12 @@ interface ToolCallRow {
   duration_ms: number;
   caller_kind: string;
   caller_id: string | null;
+  trace_id?: string | null;
 }
 
 export async function insertToolCalls(
   deploymentId: string,
-  calls: Array<Omit<ToolCallRecord, "id" | "deploymentId"> & { traceId: string | null; spanId: string | null }>,
+  calls: Array<Omit<ToolCallRecord, "id" | "deploymentId"> & { spanId: string | null }>,
 ): Promise<void> {
   if (calls.length === 0) return;
   const { error } = await getSupabase()
@@ -499,7 +502,7 @@ export async function listToolCalls(deploymentIds: string[], options: { limit: n
   if (deploymentIds.length === 0) return [];
   let query = getSupabase()
     .from("tool_calls")
-    .select("id,deployment_id,started_at,tool,ok,error_type,http_status,duration_ms,caller_kind,caller_id")
+    .select("id,deployment_id,started_at,tool,ok,error_type,http_status,duration_ms,caller_kind,caller_id,trace_id")
     .in("deployment_id", deploymentIds)
     .order("started_at", { ascending: false })
     .limit(options.limit);
@@ -518,6 +521,7 @@ export async function listToolCalls(deploymentIds: string[], options: { limit: n
     durationMs: row.duration_ms,
     callerKind: row.caller_kind,
     callerId: row.caller_id,
+    traceId: row.trace_id ?? null,
   }));
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { listDeployments, type DeploymentRecord } from "../mcp/api.js";
 import { Link } from "../../router.js";
 import { PageHead, Stat } from "../../ui.js";
@@ -18,6 +18,69 @@ const ERRORS: Record<string, string> = {
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+/** The exact time, for a record's details. */
+function formatExact(iso: string): string {
+  const date = new Date(iso);
+  return `${date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "medium" })}.${String(date.getMilliseconds()).padStart(3, "0")}`;
+}
+
+const ERROR_DETAILS: Record<string, string> = {
+  unknown_tool: "The caller asked for a tool this server doesn't have.",
+  invalid_input: "The arguments didn't match the tool's input schema, so the API wasn't called.",
+  upstream_error: "The API answered with an error status.",
+  request_failed: "The request to the API couldn't be made (network error, timeout or a missing credential).",
+};
+
+const CALLER_KINDS: Record<string, string> = {
+  key: "Access key",
+  user: "Signed-in altship account",
+  "end-user": "End user of a customers server",
+  local: "Local (stdio)",
+  anonymous: "Unauthenticated",
+};
+
+/** A summary row that opens its details when clicked, like a log stream. */
+function LogRow({ open, onToggle, cells, columns, children }: { open: boolean; onToggle: () => void; cells: ReactNode; columns: number; children: ReactNode }) {
+  return (
+    <>
+      <tr className={open ? "log-row is-open" : "log-row"} onClick={onToggle}>
+        <td className="log-toggle">
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-label={open ? "Hide details" : "Show details"}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggle();
+            }}
+          >
+            <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+              <path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        </td>
+        {cells}
+      </tr>
+      {open && (
+        <tr className="log-detail">
+          <td colSpan={columns + 1}>
+            <dl>{children}</dl>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function Detail({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{children}</dd>
+    </div>
+  );
 }
 
 function formatDuration(ms: number): string {
@@ -51,6 +114,8 @@ export function ToolCallLog({ deploymentId, pageSize = 50, summary = false }: { 
   const [retentionDays, setRetentionDays] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The one call whose details are showing.
+  const [openId, setOpenId] = useState<string | null>(null);
 
   async function load(before?: string) {
     setBusy(true);
@@ -100,37 +165,71 @@ export function ToolCallLog({ deploymentId, pageSize = 50, summary = false }: { 
           <table className="servers logs">
             <thead>
               <tr>
+                <th>
+                  <span className="visually-hidden">Details</span>
+                </th>
                 <th>Time</th>
                 {!deploymentId && <th>Server</th>}
                 <th>Tool</th>
-                <th>Called by</th>
                 <th>Result</th>
-                <th>API status</th>
                 <th>Duration</th>
               </tr>
             </thead>
             <tbody>
               {calls.map((c) => (
-                <tr key={c.id}>
-                  <td className="date">{formatTime(c.startedAt)}</td>
-                  {!deploymentId && (
-                    <td>
-                      <Link to={`mcp/servers/${c.deploymentId}`}>{c.serverName}</Link>
-                    </td>
-                  )}
-                  <td>
+                <LogRow
+                  key={c.id}
+                  open={openId === c.id}
+                  onToggle={() => setOpenId(openId === c.id ? null : c.id)}
+                  columns={deploymentId ? 4 : 5}
+                  cells={
+                    <>
+                      <td className="date">{formatTime(c.startedAt)}</td>
+                      {!deploymentId && <td>{c.serverName}</td>}
+                      <td>
+                        <code>{c.tool}</code>
+                      </td>
+                      <td>
+                        <span className={c.ok ? "log-result" : "log-result log-failed"}>{c.ok ? "OK" : (ERRORS[c.errorType ?? ""] ?? "Failed")}</span>
+                      </td>
+                      <td className="date">{formatDuration(c.durationMs)}</td>
+                    </>
+                  }
+                >
+                  <Detail label="Called by">
+                    {c.caller.label}
+                    <small>
+                      {CALLER_KINDS[c.caller.kind] ?? c.caller.kind}
+                      {c.caller.id && (
+                        <>
+                          {" · id "}
+                          <code>{c.caller.id}</code>
+                        </>
+                      )}
+                    </small>
+                  </Detail>
+                  <Detail label="Server">
+                    <Link to={`mcp/servers/${c.deploymentId}`}>{c.serverName || "View server"}</Link>
+                  </Detail>
+                  <Detail label="Tool">
                     <code>{c.tool}</code>
-                  </td>
-                  <td className="server-name">
-                    <strong>{c.caller.label}</strong>
-                    {c.caller.id && <small title={`${c.caller.kind} id`}>{c.caller.id}</small>}
-                  </td>
-                  <td>
-                    <span className={c.ok ? "log-result" : "log-result log-failed"}>{c.ok ? "OK" : (ERRORS[c.errorType ?? ""] ?? "Failed")}</span>
-                  </td>
-                  <td>{c.httpStatus ?? "—"}</td>
-                  <td className="date">{formatDuration(c.durationMs)}</td>
-                </tr>
+                  </Detail>
+                  <Detail label="Result">
+                    {c.ok ? "OK" : (ERRORS[c.errorType ?? ""] ?? "Failed")}
+                    {!c.ok && c.errorType && ERROR_DETAILS[c.errorType] && <small>{ERROR_DETAILS[c.errorType]}</small>}
+                  </Detail>
+                  <Detail label="API status">{c.httpStatus ?? "No request was made"}</Detail>
+                  <Detail label="Started">{formatExact(c.startedAt)}</Detail>
+                  <Detail label="Duration">{c.durationMs} ms</Detail>
+                  {c.traceId && (
+                    <Detail label="Trace id">
+                      <code>{c.traceId}</code>
+                    </Detail>
+                  )}
+                  <Detail label="Call id">
+                    <code>{c.id}</code>
+                  </Detail>
+                </LogRow>
               ))}
             </tbody>
           </table>
@@ -163,6 +262,8 @@ const RUN_STATUS: Record<AgentRunLog["status"], string> = {
 /** A table of agent runs, newest first: for one agent (`agentId`) or all of them. */
 function AgentRunLogTable({ agentId }: { agentId?: string }) {
   const [runs, setRuns] = useState<AgentRunLog[] | null>(null);
+  // The one run whose details are showing.
+  const [openId, setOpenId] = useState<string | null>(null);
   const [retentionDays, setRetentionDays] = useState<number | null>(null);
   const [nextBefore, setNextBefore] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -211,38 +312,57 @@ function AgentRunLogTable({ agentId }: { agentId?: string }) {
           <table className="servers logs runs">
             <thead>
               <tr>
+                <th>
+                  <span className="visually-hidden">Details</span>
+                </th>
                 <th>Started</th>
                 {!agentId && <th>Agent</th>}
-                <th>Called from</th>
                 <th>Status</th>
-                <th>Tool calls</th>
                 <th>Duration</th>
-                <th>Input</th>
-                <th>Output</th>
               </tr>
             </thead>
             <tbody>
-              {runs.map((r) => (
-                <tr key={r.sessionId}>
-                  <td className="date">{formatTime(r.createdAt)}</td>
-                  {!agentId && (
-                    <td>
-                      <Link to={`agents/${r.agentId}/runs`}>{r.agentName}</Link>
-                    </td>
-                  )}
-                  <td className="server-name">
-                    <strong>{r.source === "endpoint" ? "API endpoint" : "Playground (you)"}</strong>
-                    <small title="Run id">{r.sessionId}</small>
-                  </td>
-                  <td>
-                    <span className={`status-tag ${r.status}`}>{RUN_STATUS[r.status]}</span>
-                  </td>
-                  <td>{r.toolCalls ?? "—"}</td>
-                  <td className="date">{r.endedAt ? formatDuration(Math.max(Date.parse(r.endedAt) - Date.parse(r.createdAt), 0)) : "—"}</td>
-                  <td className="run-text">{r.inputPreview ?? "—"}</td>
-                  <td className="run-text">{r.outputPreview ?? "—"}</td>
-                </tr>
-              ))}
+              {runs.map((r) => {
+                const duration = r.endedAt ? formatDuration(Math.max(Date.parse(r.endedAt) - Date.parse(r.createdAt), 0)) : null;
+                return (
+                  <LogRow
+                    key={r.sessionId}
+                    open={openId === r.sessionId}
+                    onToggle={() => setOpenId(openId === r.sessionId ? null : r.sessionId)}
+                    columns={agentId ? 3 : 4}
+                    cells={
+                      <>
+                        <td className="date">{formatTime(r.createdAt)}</td>
+                        {!agentId && <td>{r.agentName}</td>}
+                        <td>
+                          <span className={`status-tag ${r.status}`}>{RUN_STATUS[r.status]}</span>
+                        </td>
+                        <td className="date">{duration ?? "—"}</td>
+                      </>
+                    }
+                  >
+                    <Detail label="Agent">
+                      <Link to={`agents/${r.agentId}/runs`}>{r.agentName || "View agent"}</Link>
+                    </Detail>
+                    <Detail label="Called from">{r.source === "endpoint" ? "API endpoint" : "Playground (you)"}</Detail>
+                    <Detail label="Status">{RUN_STATUS[r.status]}</Detail>
+                    <Detail label="Tool calls">{r.toolCalls ?? "Not recorded"}</Detail>
+                    <Detail label="Started">{formatExact(r.createdAt)}</Detail>
+                    <Detail label={r.status === "running" ? "Last settled" : "Finished"}>{r.endedAt ? formatExact(r.endedAt) : "Not recorded"}</Detail>
+                    <Detail label="Run id">
+                      <code>{r.sessionId}</code>
+                    </Detail>
+                    <div className="log-detail-wide">
+                      <dt>Input</dt>
+                      <dd className="log-text">{r.inputPreview ?? "—"}</dd>
+                    </div>
+                    <div className="log-detail-wide">
+                      <dt>Output</dt>
+                      <dd className="log-text">{r.outputPreview ?? "—"}</dd>
+                    </div>
+                  </LogRow>
+                );
+              })}
             </tbody>
           </table>
         </div>

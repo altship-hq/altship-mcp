@@ -13,6 +13,8 @@ export interface ToolCall {
   /** The upstream API's HTTP status, when a request was made. */
   httpStatus: number | null;
   durationMs: number;
+  /** The OpenTelemetry trace id the server exported the call under. */
+  traceId: string | null;
   /** `id` is the key's hash prefix, the altship user id or the end-user connection id; `label` names it. */
   caller: { kind: string; id: string | null; label: string };
 }
