@@ -21,6 +21,9 @@ export interface LogPage {
   calls: ToolCall[];
   /** Pass as `before` for the next (older) page; null when there isn't one. */
   nextBefore: string | null;
+  /** How many days of history the account's plan keeps. */
+  retentionDays: number;
+  plan: string;
 }
 
 /** One run of an agent, from the playground or its API endpoint. */
@@ -42,6 +45,9 @@ export interface AgentRunLog {
 export interface AgentRunPage {
   runs: AgentRunLog[];
   nextBefore: string | null;
+  /** How many days of history the account's plan keeps. */
+  retentionDays: number;
+  plan: string;
 }
 
 export function listAgentRuns(options: { agentId?: string; before?: string; limit?: number } = {}): Promise<AgentRunPage> {

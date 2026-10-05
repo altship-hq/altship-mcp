@@ -3,17 +3,19 @@ import express, { type NextFunction, type Request, type Response } from "express
 import cors from "cors";
 import os from "node:os";
 import path from "node:path";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
 import { validateSpec, type SpecInput } from "@altship/openapi";
 import { designTools } from "@altship/tool-design";
-import { generateServer, generateVercelServer, deriveAuthBinding, envSlug } from "@altship/mcp-gen";
-import { ensureProject, setProjectEnvVar, assignMcpSubdomain, deployFiles, redeploy, VercelConfigError } from "./vercel-client.js";
+import { generateServer, generateVercelServer, deriveAuthBinding, envSlug, upgradeVercelServerFiles, UpgradeError } from "@altship/mcp-gen";
+import { ensureProject, setProjectEnvVar, assignMcpSubdomain, deployFiles, getDeploymentFiles, redeploy, VercelConfigError } from "./vercel-client.js";
 import {
   recordDeployment,
   listDeployments,
   getDeployment,
   renameDeployment,
+  canRecordUpgrades,
+  markUpgraded,
   insertServerKey,
   listServerKeys,
   activeKeyHashes,
@@ -45,6 +47,8 @@ import { confirmedEmailOf, requireAuth, userIdOf } from "./auth.js";
 import { inviteLink, sendInviteEmail } from "./email.js";
 import { parseToolCallSpans, projectIdFromToken, telemetryEnv } from "./telemetry.js";
 import { getSupabase } from "./supabase.js";
+import { PLANS, planOf, retentionCutoff } from "./plans.js";
+import { runRetention } from "./retention.js";
 import { agentsRouter, agentsErrorHandler } from "./agents/router.js";
 import { endUsersRouter } from "./end-users/router.js";
 import { listConnections, revokeConnection } from "./end-users/store.js";
@@ -90,6 +94,18 @@ app.post("/api/otel/v1/traces", async (req, res) => {
   await insertToolCalls(deployment.id, parseToolCallSpans(req.body));
   // OTLP's success response: an empty ExportTraceServiceResponse.
   res.json({});
+});
+
+// Daily cleanup of Observability records past their account's retention
+// window, called by the host's scheduler (Vercel Cron sends CRON_SECRET as a
+// bearer token).
+app.all("/api/cron/retention", async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return res.status(503).json({ error: "CRON_SECRET isn't set, so scheduled cleanup is off." });
+  const given = req.header("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
+  const digest = (value: string) => createHash("sha256").update(value).digest();
+  if (!timingSafeEqual(digest(given), digest(secret))) return res.status(401).json({ error: "Not allowed." });
+  res.json({ deleted: await runRetention() });
 });
 
 app.use("/api/agents", agentsRouter, agentsErrorHandler);
@@ -287,6 +303,8 @@ app.post("/api/deploy", async (req, res) => {
 
     res.json({
       ...record,
+      sourceDeploymentId: record.id,
+      needsUpgrade: false,
       createdAt: new Date().toISOString(),
       mcpUrl: mcpEndpoint(record.url),
       accessKey,
@@ -309,6 +327,45 @@ app.patch("/api/deployments/:id", async (req, res) => {
   const deployment = await renameDeployment(String(req.params.id), userIdOf(req), serverName(req.body.name));
   if (!deployment) return res.status(404).json({ error: "MCP server not found." });
   res.json(deployment);
+});
+
+// Upgrades a server deployed with older generated code (before access checks
+// or call logging, say) to what's generated today, in place: same URL, keys
+// and people. Its OpenAPI spec isn't kept, so the server's own files are
+// fetched back from the host, the shared logic in them is replaced, and the
+// result is deployed to the same project. If the new build fails, the host
+// keeps serving the old one and nothing is recorded.
+app.post("/api/deployments/:id/upgrade", async (req, res) => {
+  const deployment = await getDeployment(String(req.params.id), userIdOf(req));
+  if (!deployment) return res.status(404).json({ error: "MCP server not found." });
+  if (!deployment.needsUpgrade) return res.json(deployment);
+  // Checked first: an upgrade that can't be recorded would be undone by the next key change.
+  if (!(await canRecordUpgrades())) {
+    return res.status(500).json({ error: "The database is missing the columns upgrades are recorded in. Run the latest supabase-schema.sql, then try again." });
+  }
+
+  try {
+    const files = await getDeploymentFiles(deployment.sourceDeploymentId);
+    const upgraded = upgradeVercelServerFiles(files, { authMode: deployment.authMode ?? "static" });
+
+    await applyAccessEnv({
+      audience: deployment.audience,
+      projectId: deployment.projectId,
+      ownerId: deployment.userId,
+      memberIds: await memberIds(deployment.id),
+      keyHashes: await activeKeyHashes(deployment.id),
+    });
+    for (const [key, value] of Object.entries(telemetryEnv(deployment.projectId))) {
+      await setProjectEnvVar(deployment.projectId, key, value);
+    }
+
+    const deployed = await deployFiles({ id: deployment.projectId, name: deployment.projectName }, upgraded);
+    res.json(await markUpgraded(deployment.id, deployment.userId, deployed.id));
+  } catch (err) {
+    if (err instanceof UpgradeError) return res.status(400).json({ error: err.message });
+    console.error("Upgrade failed:", err);
+    res.status(500).json({ error: err instanceof Error ? err.message : "Upgrade failed." });
+  }
 });
 
 // ---- Access keys ----------------------------------------------------------
@@ -387,8 +444,10 @@ app.get("/api/logs", async (req, res) => {
 
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), MAX_LOG_PAGE);
   const before = typeof req.query.before === "string" && !Number.isNaN(Date.parse(req.query.before)) ? req.query.before : undefined;
+  // Only what the account's plan keeps is shown (older calls are deleted daily).
+  const plan = await planOf(userIdOf(req));
   // One extra row tells us whether there's another page.
-  const rows = await listToolCalls(deployments.map((d) => d.id), { limit: limit + 1, before });
+  const rows = await listToolCalls(deployments.map((d) => d.id), { limit: limit + 1, before, since: retentionCutoff(plan) });
   const calls = rows.slice(0, limit);
   const callerLabel = await callerLabeller(deployments, calls, confirmedEmailOf(req));
   const byId = new Map(deployments.map((d) => [d.id, d]));
@@ -407,6 +466,8 @@ app.get("/api/logs", async (req, res) => {
       caller: { kind: call.callerKind, id: call.callerId, label: callerLabel(call) },
     })),
     nextBefore: rows.length > limit ? calls[calls.length - 1].startedAt : null,
+    plan,
+    retentionDays: PLANS[plan].retentionDays,
   });
 });
 
@@ -571,7 +632,7 @@ async function syncAccessKeys(deployment: DeploymentRecord) {
     memberIds: await memberIds(deployment.id),
     keyHashes: await activeKeyHashes(deployment.id),
   });
-  await redeploy({ id: deployment.projectId, name: deployment.projectName }, deployment.id);
+  await redeploy({ id: deployment.projectId, name: deployment.projectName }, deployment.sourceDeploymentId);
 }
 
 const MAX_SERVER_NAME = 80;

@@ -60,7 +60,7 @@ export default function McpProduct({ subpath }: { subpath: string }) {
           deploymentId={serverId}
           deployments={deployments}
           loading={loading}
-          onRenamed={(renamed) => setDeployments((current) => current.map((d) => (d.id === renamed.id ? { ...d, name: renamed.name } : d)))}
+          onUpdated={(updated) => setDeployments((current) => current.map((d) => (d.id === updated.id ? { ...d, ...updated } : d)))}
         />
       ) : subpath === "servers" ? (
         <>

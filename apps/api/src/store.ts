@@ -1,3 +1,4 @@
+import { GENERATOR_VERSION } from "@altship/mcp-gen";
 import { getSupabase } from "./supabase.js";
 import type { Audience } from "./server-access.js";
 
@@ -39,6 +40,10 @@ export interface DeploymentRecord {
   authMode: "static" | "passthrough" | null;
   /** Only for audience "customers". */
   connectSettings: ConnectSettings | null;
+  /** The hosting deployment holding the server's current code: `id`, until an in-place upgrade. */
+  sourceDeploymentId: string;
+  /** Runs older generated code than today's (e.g. without call logging) and can be upgraded in place. */
+  needsUpgrade: boolean;
 }
 
 interface DeploymentRow {
@@ -55,6 +60,8 @@ interface DeploymentRow {
   tools: DeployedTool[] | null;
   auth_mode: "static" | "passthrough" | null;
   connect_settings: ConnectSettings | null;
+  generator_version?: number | null;
+  source_deployment_id?: string | null;
 }
 
 function fromRow(row: DeploymentRow): DeploymentRecord {
@@ -72,6 +79,8 @@ function fromRow(row: DeploymentRow): DeploymentRecord {
     tools: row.tools ?? null,
     authMode: row.auth_mode ?? null,
     connectSettings: row.connect_settings ?? null,
+    sourceDeploymentId: row.source_deployment_id || row.id,
+    needsUpgrade: (row.generator_version ?? 0) < GENERATOR_VERSION,
   };
 }
 
@@ -86,10 +95,9 @@ export async function listDeployments(userId: string): Promise<DeploymentRecord[
   return (data as DeploymentRow[]).map(fromRow);
 }
 
-export async function recordDeployment(record: Omit<DeploymentRecord, "createdAt">): Promise<void> {
-  const { error } = await getSupabase()
-    .from("deployments")
-    .insert({
+/** Records a server deployed just now, which runs the current generation of the generated code. */
+export async function recordDeployment(record: Omit<DeploymentRecord, "createdAt" | "sourceDeploymentId" | "needsUpgrade">): Promise<void> {
+  const row = {
       id: record.id,
       user_id: record.userId,
       audience: record.audience,
@@ -103,9 +111,31 @@ export async function recordDeployment(record: Omit<DeploymentRecord, "createdAt
       tools: record.tools,
       auth_mode: record.authMode,
       connect_settings: record.connectSettings,
-    });
+  };
+  let { error } = await getSupabase().from("deployments").insert({ ...row, generator_version: GENERATOR_VERSION });
+  // That column was added later; a database without it still records the server.
+  if (error && /generator_version/.test(error.message)) ({ error } = await getSupabase().from("deployments").insert(row));
 
   if (error) throw new Error(`Failed to record deployment: ${error.message}`);
+}
+
+/** Whether the database has the columns an in-place upgrade records its result in. */
+export async function canRecordUpgrades(): Promise<boolean> {
+  const { error } = await getSupabase().from("deployments").select("generator_version,source_deployment_id").limit(1);
+  return !error;
+}
+
+/** Records that the user's deployment now runs the current generation, from `sourceDeploymentId`. */
+export async function markUpgraded(id: string, userId: string, sourceDeploymentId: string): Promise<DeploymentRecord | null> {
+  const { data, error } = await getSupabase()
+    .from("deployments")
+    .update({ generator_version: GENERATOR_VERSION, source_deployment_id: sourceDeploymentId })
+    .eq("id", id)
+    .eq("user_id", userId)
+    .select("*")
+    .maybeSingle();
+  if (error) throw new Error(`Failed to record the upgrade: ${error.message}`);
+  return data ? fromRow(data as DeploymentRow) : null;
 }
 
 export async function getDeployment(id: string, userId: string): Promise<DeploymentRecord | null> {
@@ -464,8 +494,8 @@ export async function insertToolCalls(
   if (error) throw new Error(`Failed to record tool calls: ${error.message}`);
 }
 
-/** The most recent calls on those deployments, newest first; `before` pages further back. */
-export async function listToolCalls(deploymentIds: string[], options: { limit: number; before?: string }): Promise<ToolCallRecord[]> {
+/** The most recent calls on those deployments, newest first; `before` pages further back, `since` is the oldest to include. */
+export async function listToolCalls(deploymentIds: string[], options: { limit: number; before?: string; since?: string }): Promise<ToolCallRecord[]> {
   if (deploymentIds.length === 0) return [];
   let query = getSupabase()
     .from("tool_calls")
@@ -474,6 +504,7 @@ export async function listToolCalls(deploymentIds: string[], options: { limit: n
     .order("started_at", { ascending: false })
     .limit(options.limit);
   if (options.before) query = query.lt("started_at", options.before);
+  if (options.since) query = query.gte("started_at", options.since);
   const { data, error } = await query;
   if (error) throw new Error(`Failed to list tool calls: ${error.message}`);
   return (data as ToolCallRow[]).map((row) => ({

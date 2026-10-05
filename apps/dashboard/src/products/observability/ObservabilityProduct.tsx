@@ -24,6 +24,16 @@ function formatDuration(ms: number): string {
   return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(ms < 10_000 ? 2 : 1)} s`;
 }
 
+/** How much history is kept, shown above a full log. */
+function RetentionNote({ days }: { days: number | null }) {
+  if (days === null) return null;
+  return (
+    <p className="section-copy log-retention">
+      Showing the last {days} day{days === 1 ? "" : "s"}. Older records are deleted; longer history will come with paid plans.
+    </p>
+  );
+}
+
 function median(values: number[]): number | null {
   if (values.length === 0) return null;
   const sorted = [...values].sort((a, b) => a - b);
@@ -38,6 +48,7 @@ function median(values: number[]): number | null {
 export function ToolCallLog({ deploymentId, pageSize = 50, summary = false }: { deploymentId?: string; pageSize?: number; summary?: boolean }) {
   const [calls, setCalls] = useState<ToolCall[] | null>(null);
   const [nextBefore, setNextBefore] = useState<string | null>(null);
+  const [retentionDays, setRetentionDays] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -48,6 +59,7 @@ export function ToolCallLog({ deploymentId, pageSize = 50, summary = false }: { 
       const page = await listLogs({ deploymentId, before, limit: pageSize });
       setCalls((current) => (before ? [...(current ?? []), ...page.calls] : page.calls));
       setNextBefore(page.nextBefore);
+      setRetentionDays(page.retentionDays ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -64,6 +76,7 @@ export function ToolCallLog({ deploymentId, pageSize = 50, summary = false }: { 
 
   return (
     <>
+      {summary && <RetentionNote days={retentionDays} />}
       {summary && (
         <div className="stats">
           <Stat label={nextBefore ? "Calls loaded" : "Calls"} value={calls ? String(calls.length) : "—"} />
@@ -78,7 +91,7 @@ export function ToolCallLog({ deploymentId, pageSize = 50, summary = false }: { 
       ) : calls.length === 0 ? (
         <div className="empty">
           <p>
-            No tool calls recorded yet. Servers deployed before call logging was added don't record calls; deploy the server again
+            No tool calls{retentionDays ? ` in the last ${retentionDays} days` : " recorded yet"}. Servers deployed before call logging was added don't record calls; deploy the server again
             to start.
           </p>
         </div>
@@ -150,6 +163,7 @@ const RUN_STATUS: Record<AgentRunLog["status"], string> = {
 /** A table of agent runs, newest first: for one agent (`agentId`) or all of them. */
 function AgentRunLogTable({ agentId }: { agentId?: string }) {
   const [runs, setRuns] = useState<AgentRunLog[] | null>(null);
+  const [retentionDays, setRetentionDays] = useState<number | null>(null);
   const [nextBefore, setNextBefore] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -161,6 +175,7 @@ function AgentRunLogTable({ agentId }: { agentId?: string }) {
       const page = await listAgentRuns({ agentId, before, limit: 50 });
       setRuns((current) => (before ? [...(current ?? []), ...page.runs] : page.runs));
       setNextBefore(page.nextBefore);
+      setRetentionDays(page.retentionDays ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -177,6 +192,7 @@ function AgentRunLogTable({ agentId }: { agentId?: string }) {
 
   return (
     <>
+      <RetentionNote days={retentionDays} />
       <div className="stats">
         <Stat label={nextBefore ? "Runs loaded" : "Runs"} value={runs ? String(runs.length) : "—"} />
         <Stat label="Failed" value={runs ? String(runs.filter((r) => r.status === "failed").length) : "—"} />
@@ -188,7 +204,7 @@ function AgentRunLogTable({ agentId }: { agentId?: string }) {
         !error && <div className="empty">Loading…</div>
       ) : runs.length === 0 ? (
         <div className="empty">
-          <p>No agent runs yet. Try an agent in its Playground or call its endpoint.</p>
+          <p>No agent runs{retentionDays ? ` in the last ${retentionDays} days` : " yet"}. Try an agent in its Playground or call its endpoint.</p>
         </div>
       ) : (
         <div className="table-wrap">

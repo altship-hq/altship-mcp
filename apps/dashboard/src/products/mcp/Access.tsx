@@ -16,6 +16,7 @@ import {
   type EndUserConnection,
   type Invite,
   type Member,
+  upgradeDeployment,
 } from "./api.js";
 import { Link } from "../../router.js";
 import { PageHead } from "../../ui.js";
@@ -384,8 +385,43 @@ function People({ deployment }: { deployment: DeploymentRecord }) {
   );
 }
 
+/** For servers deployed before call logging existed: upgrade in place to start recording. */
+function UpgradeNotice({ deployment, onUpdated }: { deployment: DeploymentRecord; onUpdated?: (updated: DeploymentRecord) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+
+  async function upgrade() {
+    setBusy(true);
+    setError(null);
+    try {
+      onUpdated?.(await upgradeDeployment(deployment.id));
+      setDone(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+    setBusy(false);
+  }
+
+  if (done) return <p className="section-copy">Upgraded. New tool calls on this server will appear here.</p>;
+  if (!deployment.needsUpgrade) return null;
+  return (
+    <div className="key-notice">
+      <strong>This server doesn't record its calls yet.</strong> It was deployed before call logging existed. Upgrading keeps its
+      URL, access keys and people, brings its access checks up to date, and takes about a minute. Calls made before the upgrade
+      can't be recovered.
+      {error && <div className="notice">{error}</div>}
+      <div className="log-actions">
+        <button type="button" className="btn" disabled={busy} onClick={upgrade}>
+          {busy ? "Upgrading…" : "Upgrade this server"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** The server's name as the page heading, with a way to change it. */
-function ServerHead({ deployment, onRenamed }: { deployment: DeploymentRecord; onRenamed?: (renamed: DeploymentRecord) => void }) {
+function ServerHead({ deployment, onUpdated }: { deployment: DeploymentRecord; onUpdated?: (updated: DeploymentRecord) => void }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(deployment.name);
   const [busy, setBusy] = useState(false);
@@ -403,7 +439,7 @@ function ServerHead({ deployment, onRenamed }: { deployment: DeploymentRecord; o
     setBusy(true);
     setError(null);
     try {
-      onRenamed?.(await renameDeployment(deployment.id, name));
+      onUpdated?.(await renameDeployment(deployment.id, name));
       setEditing(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -458,12 +494,12 @@ export function ServerPage({
   deploymentId,
   deployments,
   loading,
-  onRenamed,
+  onUpdated,
 }: {
   deploymentId: string;
   deployments: DeploymentRecord[];
   loading: boolean;
-  onRenamed?: (renamed: DeploymentRecord) => void;
+  onUpdated?: (updated: DeploymentRecord) => void;
 }) {
   const deployment = deployments.find((d) => d.id === deploymentId);
   const [keys, setKeys] = useState<AccessKey[] | null>(null);
@@ -495,7 +531,7 @@ export function ServerPage({
   if (deployment.audience === "customers") {
     return (
       <>
-        <ServerHead deployment={deployment} onRenamed={onRenamed} />
+        <ServerHead deployment={deployment} onUpdated={onUpdated} />
         <section className="dash-section">
           <h2>Who it's for</h2>
           <div className="audience-row">
@@ -513,6 +549,7 @@ export function ServerPage({
             <h2>Recent calls</h2>
             <Link to="observability">All tool calls →</Link>
           </div>
+          <UpgradeNotice deployment={deployment} onUpdated={onUpdated} />
           <ToolCallLog deploymentId={deployment.id} pageSize={10} />
         </section>
       </>
@@ -551,7 +588,7 @@ export function ServerPage({
 
   return (
     <>
-      <ServerHead deployment={deployment} onRenamed={onRenamed} />
+      <ServerHead deployment={deployment} onUpdated={onUpdated} />
       {error && <div className="notice">{error}</div>}
 
       <section className="dash-section">
@@ -644,6 +681,7 @@ export function ServerPage({
           <h2>Recent calls</h2>
           <Link to="observability">All tool calls →</Link>
         </div>
+        <UpgradeNotice deployment={deployment} onUpdated={onUpdated} />
         <ToolCallLog deploymentId={deployment.id} pageSize={10} />
       </section>
     </>

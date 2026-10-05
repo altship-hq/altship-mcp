@@ -184,3 +184,41 @@ async function pollUntilReady(deploymentId: string, timeoutMs = 90_000): Promise
 
   throw new Error(`Deployment ${deploymentId} did not become ready within ${timeoutMs}ms`);
 }
+
+const MAX_SOURCE_FILES = 200;
+
+/**
+ * The source files of a deployment we created (deployFiles), by path. Used to
+ * upgrade a server in place: its files are the only copy of what was generated.
+ */
+export async function getDeploymentFiles(deploymentId: string): Promise<Record<string, string>> {
+  const tree = await vercelFetch(`/v6/deployments/${deploymentId}/files`);
+  if (!tree.ok) throw new Error(`Failed to list the files of deployment ${deploymentId}: ${tree.status} ${await tree.text()}`);
+
+  type Entry = { name: string; type: string; uid?: string; children?: Entry[] };
+  const found: { path: string; uid: string }[] = [];
+  const walk = (entries: Entry[], prefix: string) => {
+    for (const entry of entries) {
+      const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.type === "directory") walk(entry.children ?? [], path);
+      else if (entry.type === "file" && entry.uid) found.push({ path, uid: entry.uid });
+    }
+  };
+  walk((await tree.json()) as Entry[], "");
+
+  // Uploaded source sits under "src/"; the rest of the listing is build output.
+  const sources = found.filter((f) => f.path.startsWith("src/"));
+  if (sources.length === 0 || sources.length > MAX_SOURCE_FILES) {
+    throw new Error(`Deployment ${deploymentId} has ${sources.length} source files; expected a generated server.`);
+  }
+
+  const files: Record<string, string> = {};
+  for (const source of sources) {
+    const res = await vercelFetch(`/v8/deployments/${deploymentId}/files/${source.uid}`);
+    if (!res.ok) throw new Error(`Failed to read ${source.path} from deployment ${deploymentId}: ${res.status}`);
+    const body = (await res.json()) as { data?: string };
+    if (typeof body.data !== "string") throw new Error(`Deployment ${deploymentId} returned no content for ${source.path}.`);
+    files[source.path.slice("src/".length)] = Buffer.from(body.data, "base64").toString("utf8");
+  }
+  return files;
+}

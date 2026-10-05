@@ -139,3 +139,68 @@ export async function generateVercelServer(options: GenerateOptions): Promise<Ge
   const filesWritten = await writeFiles(outDir, files);
   return { outDir, filesWritten, warnings };
 }
+
+/**
+ * The generation of the server code this package writes. Bumped when the
+ * generated logic gains something an already-deployed server would need an
+ * upgrade to get (2: caller identity and tool-call telemetry).
+ */
+export const GENERATOR_VERSION = 2;
+
+/** Files that are the same for every Vercel server, or depend only on its package name and auth mode. */
+const VERCEL_LOGIC_FILES = [
+  "package.json",
+  "tsconfig.json",
+  "vercel.json",
+  "lib/types.ts",
+  "lib/access.ts",
+  "lib/client.ts",
+  "lib/telemetry.ts",
+  "lib/mcp-factory.ts",
+  "api/mcp.ts",
+  "api/health.ts",
+  "api/oauth-protected-resource.ts",
+] as const;
+
+export class UpgradeError extends Error {}
+
+/**
+ * Brings an already-deployed Vercel server's files up to the current
+ * generation without its OpenAPI spec: the shared logic (access checks,
+ * telemetry, the MCP handler) is replaced with what's generated today, and
+ * everything derived from the spec (its tools, base URL, how it authenticates
+ * upstream, its docs) is kept exactly as it was.
+ */
+export function upgradeVercelServerFiles(files: Record<string, string>, options: { authMode?: "static" | "passthrough" } = {}): Record<string, string> {
+  for (const required of ["package.json", "lib/tools.ts", "lib/auth.ts", "lib/config.ts"]) {
+    if (typeof files[required] !== "string") throw new UpgradeError(`This doesn't look like a generated server: ${required} is missing.`);
+  }
+  let pkgName: unknown;
+  try {
+    pkgName = (JSON.parse(files["package.json"]) as { name?: unknown }).name;
+  } catch {
+    pkgName = undefined;
+  }
+  if (typeof pkgName !== "string" || !pkgName) throw new UpgradeError("This server's package.json has no name.");
+  // The spec-derived files rely on these two exports, which every generation has had.
+  if (!/export function applyAuth\(/.test(files["lib/auth.ts"]) || !/export function assertAuthConfigured\(/.test(files["lib/auth.ts"])) {
+    throw new UpgradeError("This server's auth module isn't one this upgrade understands.");
+  }
+
+  // The access module only needs to know whether Authorization carries the caller's own token.
+  const binding = { kind: options.authMode === "passthrough" ? "passthrough" : "none" } as AuthBinding;
+  const logic: Record<(typeof VERCEL_LOGIC_FILES)[number], string> = {
+    "package.json": vercelPackageJsonTemplate(pkgName),
+    "tsconfig.json": vercelTsconfigTemplate(),
+    "vercel.json": vercelConfigTemplate(),
+    "lib/types.ts": typesTemplate(),
+    "lib/access.ts": accessTemplate(binding),
+    "lib/client.ts": clientTemplate(),
+    "lib/telemetry.ts": telemetryTemplate(pkgName),
+    "lib/mcp-factory.ts": mcpFactoryTemplate(pkgName),
+    "api/mcp.ts": vercelMcpHandlerTemplate(),
+    "api/health.ts": vercelHealthHandlerTemplate(),
+    "api/oauth-protected-resource.ts": vercelOAuthMetadataHandlerTemplate(),
+  };
+  return { ...files, ...logic };
+}

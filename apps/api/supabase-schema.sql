@@ -28,6 +28,15 @@ alter table deployments add column if not exists audience text not null default 
 -- The owner's own name for the server. Null means "use the spec's title" (api_title).
 alter table deployments add column if not exists name text;
 
+-- Which generation of the generated code the server runs (packages/mcp-gen
+-- GENERATOR_VERSION); null for servers deployed before this was recorded.
+-- Servers behind the current one can be upgraded in place.
+alter table deployments add column if not exists generator_version integer;
+-- The hosting deployment that holds the server's current code, when it isn't
+-- the one it was first deployed as (`id`): set by an in-place upgrade, and
+-- what later redeploys start from.
+alter table deployments add column if not exists source_deployment_id text;
+
 alter table deployments enable row level security;
 
 -- Only the API server (service_role key, bypasses RLS) reads or writes these
@@ -236,3 +245,17 @@ create table if not exists tool_calls (
 create index if not exists tool_calls_deployment_idx on tool_calls (deployment_id, started_at desc);
 
 alter table tool_calls enable row level security;
+
+-- ---- Plans -------------------------------------------------------------------
+-- An account's plan, which decides how long Observability history is kept
+-- (apps/api/src/plans.ts). No row means the free plan. There's no billing
+-- yet, so to move someone to a plan by hand:
+--   insert into accounts (user_id, plan) values ('<auth.users id>', 'pro')
+--     on conflict (user_id) do update set plan = excluded.plan;
+create table if not exists accounts (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  plan text not null default 'free',
+  created_at timestamptz not null default now()
+);
+
+alter table accounts enable row level security;

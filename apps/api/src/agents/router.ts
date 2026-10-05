@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { BUILTIN_TOOLS, PlanError, compileFlow, validatePlan, type AgentPlan, type BuiltinTool } from "@altship/agent-design";
 import { AgentConfigError } from "./anthropic.js";
+import { PLANS, planOf, retentionCutoff } from "../plans.js";
 import { loadCatalog, serversUsedBy, toToolCatalog, type CatalogEntry } from "./catalog.js";
 import { planAgent, PlannerError } from "./planner.js";
 import { confirmToolCall, createAgentVault, createManagedAgents, followSession, sendUserMessage, startSession } from "./runtime.js";
@@ -119,13 +120,17 @@ agentsRouter.get("/runs", async (req, res) => {
 
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
   const before = typeof req.query.before === "string" && !Number.isNaN(Date.parse(req.query.before)) ? req.query.before : undefined;
+  // Only what the account's plan keeps is shown (older runs are deleted daily).
+  const plan = await planOf(userIdOf(req));
   // One extra row tells us whether there's another page.
-  const rows = await listRunsForAgents(wanted.map((a) => a.id), { limit: limit + 1, before });
+  const rows = await listRunsForAgents(wanted.map((a) => a.id), { limit: limit + 1, before, since: retentionCutoff(plan) });
   const runs = rows.slice(0, limit);
   const names = new Map(agents.map((a) => [a.id, a.name]));
   res.json({
     runs: runs.map((run) => ({ ...run, agentName: names.get(run.agentId) ?? "" })),
     nextBefore: rows.length > limit ? runs[runs.length - 1].createdAt : null,
+    plan,
+    retentionDays: PLANS[plan].retentionDays,
   });
 });
 
@@ -136,7 +141,7 @@ agentsRouter.get("/:id", async (req, res) => {
 
 agentsRouter.get("/:id/runs", async (req, res) => {
   const agent = await requireAgent(req, res);
-  if (agent) res.json(await listRuns(agent.id));
+  if (agent) res.json(await listRuns(agent.id, retentionCutoff(await planOf(agent.userId))));
 });
 
 // ---- Playground ---------------------------------------------------------

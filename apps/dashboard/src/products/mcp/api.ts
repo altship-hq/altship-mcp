@@ -57,6 +57,8 @@ export interface DeploymentRecord {
   audience: Audience;
   /** For servers offered to customers: what their connect page shows. */
   connectSettings: { displayName: string; credentialKind: string; helpText: string | null } | null;
+  /** Runs older generated code than today's (e.g. without call logging) and can be upgraded in place. */
+  needsUpgrade: boolean;
 }
 
 /** Someone who connected to a server offered to customers. */
@@ -127,6 +129,11 @@ export function listDeployments(): Promise<DeploymentRecord[]> {
 /** Renames a server; an empty name goes back to the spec's title. */
 export function renameDeployment(deploymentId: string, name: string): Promise<DeploymentRecord> {
   return patchJson<DeploymentRecord>(`/api/deployments/${deploymentId}`, { name });
+}
+
+/** Brings a server deployed with older code up to date in place (same URL, keys and people). Takes about a minute. */
+export function upgradeDeployment(deploymentId: string): Promise<DeploymentRecord> {
+  return postJson<DeploymentRecord>(`/api/deployments/${deploymentId}/upgrade`, {});
 }
 
 /** Generated managed servers serve MCP at /api/mcp. */

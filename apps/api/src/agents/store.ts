@@ -174,22 +174,21 @@ export async function getRun(agentId: string, sessionId: string): Promise<AgentR
   return data ? fromRunRow(data as AgentRunRow) : null;
 }
 
-export async function listRuns(agentId: string): Promise<AgentRunRecord[]> {
-  const { data, error } = await getSupabase()
-    .from("agent_runs")
-    .select("*")
-    .eq("agent_id", agentId)
-    .order("created_at", { ascending: false })
-    .limit(100);
+/** An agent's latest runs; `since` is the oldest to include. */
+export async function listRuns(agentId: string, since?: string): Promise<AgentRunRecord[]> {
+  let query = getSupabase().from("agent_runs").select("*").eq("agent_id", agentId).order("created_at", { ascending: false }).limit(100);
+  if (since) query = query.gte("created_at", since);
+  const { data, error } = await query;
   if (error) throw new Error(`Failed to list runs: ${error.message}`);
   return (data as AgentRunRow[]).map(fromRunRow);
 }
 
-/** The most recent runs of those agents, newest first; `before` pages further back. */
-export async function listRunsForAgents(agentIds: string[], options: { limit: number; before?: string }): Promise<AgentRunRecord[]> {
+/** The most recent runs of those agents, newest first; `before` pages further back, `since` is the oldest to include. */
+export async function listRunsForAgents(agentIds: string[], options: { limit: number; before?: string; since?: string }): Promise<AgentRunRecord[]> {
   if (agentIds.length === 0) return [];
   let query = getSupabase().from("agent_runs").select("*").in("agent_id", agentIds).order("created_at", { ascending: false }).limit(options.limit);
   if (options.before) query = query.lt("created_at", options.before);
+  if (options.since) query = query.gte("created_at", options.since);
   const { data, error } = await query;
   if (error) throw new Error(`Failed to list runs: ${error.message}`);
   return (data as AgentRunRow[]).map(fromRunRow);

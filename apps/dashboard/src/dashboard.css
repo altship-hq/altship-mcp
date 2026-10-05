@@ -1057,7 +1057,8 @@
   cursor: pointer;
 }
 
-.dash .page-head button.btn {
+.dash .page-head button.btn,
+.dash .key-notice button.btn {
   border: 0;
   cursor: pointer;
 }
@@ -1074,6 +1075,10 @@
 
 .dash .log-result.log-failed {
   color: #a3231f;
+}
+
+.dash .log-retention {
+  margin: -12px 0 20px;
 }
 
 .dash .log-actions {

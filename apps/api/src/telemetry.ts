@@ -45,13 +45,14 @@ export function projectIdFromToken(token: string): string | null {
 
 /**
  * The env vars that point a server's telemetry at altship. Empty when
- * API_PUBLIC_URL or MCP_INTERNAL_KEY_SECRET isn't set: the server then only
+ * API_PUBLIC_URL (or MCP_INTERNAL_KEY_SECRET) isn't set or is this machine: the server then only
  * writes its audit log locally, and the dashboard has no calls to show.
  */
 export function telemetryEnv(projectId: string): Record<string, string> {
   const base = process.env.API_PUBLIC_URL?.replace(/\/$/, "");
   const secret = process.env.MCP_INTERNAL_KEY_SECRET;
-  if (!base || !secret) return {};
+  // A hosted server can't reach an API on this machine (local development).
+  if (!base || !secret || /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(base)) return {};
   return {
     OTEL_EXPORTER_OTLP_ENDPOINT: `${base}/api/otel`,
     // Header values are URL-encoded in this variable (the OpenTelemetry convention).
