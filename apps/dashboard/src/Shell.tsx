@@ -7,7 +7,7 @@ import Home from "./Home.js";
 import McpProduct from "./products/mcp/McpProduct.js";
 import AgentsProduct from "./products/agents/AgentsProduct.js";
 import ObservabilityProduct from "./products/observability/ObservabilityProduct.js";
-import logoMark from "./assets/logo-mark.png";
+import logoMark from "./assets/logo-a.svg";
 
 // pilot.altship.io: one dashboard for every altship product. Sidebar + top
 // bar here; each live product renders its own pages under /<product id>.

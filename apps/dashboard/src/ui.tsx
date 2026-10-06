@@ -100,9 +100,9 @@ export function ConfirmDialog({
   );
 }
 
-// Pictures shown while something slow runs. Decoration only: swap the files
-// in public/loading to change them.
-const LOADING_IMAGES = ["/loading/1.jpg", "/loading/2.jpg", "/loading/3.jpg"];
+// Pictures shown while something slow runs, ending on the altship mark.
+// Decoration only: swap the files in public/loading to change them.
+const LOADING_IMAGES = ["/loading/1.jpg", "/loading/2.jpg", "/loading/3.jpg", "/loading/4.jpg"];
 
 /**
  * Covers the page while something slow runs (designing an agent, deploying a

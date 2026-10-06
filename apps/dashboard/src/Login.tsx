@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { sendPasswordReset, signIn, signInWithPassword, signOut, signUp, supabase, updatePassword, type Provider } from "./auth.js";
 import { acceptInvite, type AcceptedInvite } from "./products/mcp/api.js";
 import { navigate } from "./router.js";
-import logoMark from "./assets/logo-mark.png";
+import logoMark from "./assets/logo-a.svg";
 
 /** Where to go after signing in: the ?next= path, if it's a dashboard path. */
 export function nextPath(): string {
