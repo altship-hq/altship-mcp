@@ -13,6 +13,7 @@ import {
   type ToolDefinition,
   type ValidationIssue,
 } from "./api.js";
+import { LoadingOverlay } from "../../ui.js";
 import { ConnectPanel } from "./Access.js";
 
 /** Matches the API's limit for uploaded specs. */
@@ -163,6 +164,18 @@ export default function Builder({ onDeployed }: { onDeployed?: (deployment: Depl
 
   return (
     <div className="page">
+      {loading && step === "select" && (
+        <LoadingOverlay
+          kicker="altship MCP"
+          title={platform === "vercel" ? "Deploying your MCP server" : "Generating your MCP server"}
+          steps={
+            platform === "vercel"
+              ? ["Checking your API spec", "Building the tools you selected", "Deploying the server", "Waiting for it to come online"]
+              : ["Checking your API spec", "Building the tools you selected", "Packaging the server"]
+          }
+          pace={platform === "vercel" ? 7000 : 3000}
+        />
+      )}
       {errorMessage && <div className="banner error">{errorMessage}</div>}
 
       {step === "import" && (

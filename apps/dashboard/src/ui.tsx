@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 // Building blocks shared by every product's pages.
 
@@ -97,5 +97,84 @@ export function ConfirmDialog({
         </button>
       </div>
     </Modal>
+  );
+}
+
+// Pictures shown while something slow runs. Decoration only: swap the files
+// in public/loading to change them.
+const LOADING_IMAGES = ["/loading/1.jpg", "/loading/2.jpg", "/loading/3.jpg"];
+
+/**
+ * Covers the page while something slow runs (designing an agent, deploying a
+ * server). `steps` say what's happening, in order. Pass `step` when the page
+ * knows which one it's on; otherwise they advance every `pace` ms and hold on
+ * the last, since the work is one request with no progress to report. Stays
+ * hidden for the first moment, so quick work doesn't flash it.
+ */
+export function LoadingOverlay({
+  kicker,
+  title,
+  steps,
+  step,
+  pace = 5000,
+  note = "This can take up to a minute",
+}: {
+  /** The small line above the pictures, e.g. "altship agents". */
+  kicker: string;
+  title: string;
+  steps: string[];
+  step?: number;
+  pace?: number;
+  note?: string;
+}) {
+  const [visible, setVisible] = useState(false);
+  const [timed, setTimed] = useState(0);
+  const [frame, setFrame] = useState(0);
+
+  useEffect(() => {
+    const show = window.setTimeout(() => setVisible(true), 400);
+    const frames = window.setInterval(() => setFrame((f) => (f + 1) % LOADING_IMAGES.length), 1800);
+    return () => {
+      window.clearTimeout(show);
+      window.clearInterval(frames);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (step !== undefined) return;
+    const advance = window.setInterval(() => setTimed((i) => Math.min(i + 1, steps.length - 1)), pace);
+    return () => window.clearInterval(advance);
+  }, [step, steps.length, pace]);
+
+  if (!visible) return null;
+  const current = Math.min(step ?? timed, steps.length - 1);
+  // Never full: the bar shows where the work is, not that it's done.
+  const progress = Math.round(((current + 0.5) / steps.length) * 100);
+  const count = (n: number) => String(n).padStart(2, "0");
+
+  return (
+    <div className="loading-overlay" role="status" aria-live="polite" aria-busy="true">
+      <div className="loading-content">
+        <div className="loading-kicker">{kicker}</div>
+        <div className="loading-images" aria-hidden="true">
+          {LOADING_IMAGES.map((src, i) => (
+            <div key={src} className={i === frame ? "loading-frame is-active" : "loading-frame"}>
+              <img src={src} alt="" />
+            </div>
+          ))}
+        </div>
+        <h2>{title}</h2>
+        <p className="loading-status">{steps[current]}…</p>
+        <div className="loading-track">
+          <div className="loading-progress" style={{ width: `${progress}%` }} />
+        </div>
+        <div className="loading-meta">
+          <span>
+            {count(current + 1)} / {count(steps.length)}
+          </span>
+          <span>{note}</span>
+        </div>
+      </div>
+    </div>
   );
 }

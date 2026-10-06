@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, navigate } from "../../router.js";
-import { PageHead } from "../../ui.js";
+import { LoadingOverlay, PageHead } from "../../ui.js";
 import AppsPicker from "./AppsPicker.js";
 import FlowEditor from "./FlowEditor.js";
 import { useHistory } from "./useHistory.js";
@@ -119,9 +119,28 @@ export default function NewAgent() {
     }
   }
 
+  // Shown over the page while the planner or the create request runs.
+  const overlay =
+    busy === "planning" ? (
+      <LoadingOverlay
+        kicker="altship agents"
+        title={plan ? "Reworking the plan" : "Designing your agent"}
+        steps={["Reading what you asked for", "Looking through the tools you picked", "Choosing tools and permissions", "Laying out the flow"]}
+        pace={9000}
+      />
+    ) : busy === "approving" ? (
+      <LoadingOverlay
+        kicker="altship agents"
+        title="Creating your agent"
+        steps={["Setting up the agent", "Connecting its tools", "Storing its access securely"]}
+        note="This takes a few seconds"
+      />
+    ) : null;
+
   if (!plan) {
     return (
       <>
+        {overlay}
         <PageHead
           title="New agent"
           description="Name your agent and describe what it should do. We'll propose the tools and flow for you to review and change, or you can build the flow yourself. Nothing is created until you approve."
@@ -201,6 +220,7 @@ export default function NewAgent() {
 
   return (
     <>
+      {overlay}
       <PageHead
         title="Review the flow"
         description="Add, change, connect or delete steps, then approve. Tools marked “Ask” pause for your approval every time they run."

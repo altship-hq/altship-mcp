@@ -18,7 +18,7 @@ import {
 } from "./api.js";
 import { ConnectPanel } from "./Access.js";
 import { Link } from "../../router.js";
-import { ConfirmDialog } from "../../ui.js";
+import { ConfirmDialog, LoadingOverlay } from "../../ui.js";
 
 // Memories: MCP servers altship hosts that keep notes for an LLM or an agent to
 // search and write. A memory has a name, a description and topics (such as
@@ -206,6 +206,8 @@ export function NewMemoryStore({ onCreated }: { onCreated?: () => void }) {
   const [topics, setTopics] = useState<TopicDraft[]>([]);
   const nextTopicId = useRef(1);
   const [busy, setBusy] = useState(false);
+  // What the loading overlay says while creating: the steps, and which one is running.
+  const [progress, setProgress] = useState<{ steps: string[]; step: number }>({ steps: [], step: 0 });
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<DeployResponse | null>(null);
   const [imported, setImported] = useState<number | null>(null);
@@ -219,6 +221,11 @@ export function NewMemoryStore({ onCreated }: { onCreated?: () => void }) {
     e.preventDefault();
     setBusy(true);
     setError(null);
+    const withText = named.filter((t) => t.text.trim());
+    setProgress({
+      steps: ["Creating the memory", ...(text.trim() ? ["Turning your text into notes"] : []), ...withText.map((t) => `Adding notes to ${t.title.trim()}`)],
+      step: 0,
+    });
     try {
       const store = await createMemoryStore({ name: name.trim(), description: description.trim(), topics: named.map((t) => t.title.trim()) });
       // The memory exists from here on; text that can't be turned into notes is reported, not fatal.
@@ -226,6 +233,7 @@ export function NewMemoryStore({ onCreated }: { onCreated?: () => void }) {
       const failures: string[] = [];
       const add = async (label: string, source: string, topic?: string) => {
         if (!source.trim()) return;
+        setProgress((current) => ({ ...current, step: current.step + 1 }));
         try {
           // Text written under a topic stays in it; the main text is organised by its headings, or by AI.
           const plan = await previewMemoryImport(store.id, source, topic, topic !== undefined);
@@ -277,6 +285,15 @@ export function NewMemoryStore({ onCreated }: { onCreated?: () => void }) {
 
   return (
     <form className="card memory-form" onSubmit={create}>
+      {busy && (
+        <LoadingOverlay
+          kicker="altship memory"
+          title="Creating your memory"
+          steps={progress.steps}
+          step={progress.step}
+          note={hasText ? "This can take up to a minute" : "This takes a few seconds"}
+        />
+      )}
       {error && <div className="banner error">{error}</div>}
 
       <div className="config-section credential-field">
