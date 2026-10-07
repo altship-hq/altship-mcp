@@ -56,12 +56,14 @@ export const PRODUCTS: Product[] = [
     ),
     pages: [
       { path: "", label: "Overview" },
+      { path: "templates", label: "Templates" },
       { path: "new", label: "New agent" },
     ],
     dynamicPage: (subpath) => {
-      const match = subpath.match(/^agt_[a-z0-9]+(?:\/(flow|deploy|runs))?$/);
+      const match = subpath.match(/^agt_[a-z0-9]+(?:\/(flow|deploy|schedule|runs))?$/);
       if (!match) return null;
-      return { path: subpath, label: match[1] === "deploy" ? "Deploy" : match[1] === "runs" ? "Runs" : match[1] === "flow" ? "Flow" : "Playground" };
+      const labels: Record<string, string> = { deploy: "Deploy", runs: "Runs", flow: "Flow", schedule: "Schedule" };
+      return { path: subpath, label: labels[match[1] ?? ""] ?? "Playground" };
     },
   },
   {

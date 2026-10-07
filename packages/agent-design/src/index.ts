@@ -2,6 +2,8 @@ export { AGENT_PLAN_SCHEMA } from "./schema.js";
 export { validatePlan, findTool, builtinLabel, slugify, PlanError, MAX_SPECIALISTS, MAX_TEST_PROMPTS } from "./validate.js";
 export type { ValidateOptions } from "./validate.js";
 export { compileFlow, flowInstructions, normalizeFlow, FlowError, MAX_FLOW_NODES, MAX_ROUTES } from "./flow.js";
+export { buildSchedule, ScheduleError, SCHEDULE_FREQUENCIES } from "./schedule.js";
+export type { BuiltSchedule, ScheduleFrequency, ScheduleInput } from "./schedule.js";
 export { toManagedAgentParams, coordinatorRoster } from "./to-managed-agents.js";
 export type {
   ManagedAgentParams,

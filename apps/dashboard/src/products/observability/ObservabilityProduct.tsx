@@ -355,7 +355,7 @@ function AgentRunLogTable({ agentId }: { agentId?: string }) {
                     <Detail label="Agent">
                       <Link to={`agents/${r.agentId}/runs`}>{r.agentName || "View agent"}</Link>
                     </Detail>
-                    <Detail label="Called from">{r.source === "endpoint" ? "API endpoint" : "Playground (you)"}</Detail>
+                    <Detail label="Called from">{r.source === "endpoint" ? "API endpoint" : r.source === "schedule" ? "Schedule" : "Playground (you)"}</Detail>
                     <Detail label="Status">{RUN_STATUS[r.status]}</Detail>
                     <Detail label="Tool calls">{r.toolCalls ?? "Not recorded"}</Detail>
                     <Detail label="Started">{formatExact(r.createdAt)}</Detail>

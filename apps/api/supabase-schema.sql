@@ -273,19 +273,22 @@ create index if not exists agents_user_id_idx on agents (user_id, created_at des
 
 alter table agents enable row level security;
 
--- One row per Managed Agents session, from the playground or the deployed endpoint.
+-- One row per Managed Agents session, from the playground, the deployed endpoint or a schedule.
 create table if not exists agent_runs (
   session_id text primary key,
   agent_id text not null references agents(id) on delete cascade,
   created_at timestamptz not null default now(),
-  source text not null check (source in ('playground', 'endpoint')),
+  source text not null check (source in ('playground', 'endpoint', 'schedule')),
   status text not null,
   input_preview text,
   output_preview text,
   -- For Observability: when the run last settled (answered, failed or waiting
   -- on an approval) and how many tool calls the agent has made in it.
   ended_at timestamptz,
-  tool_calls integer
+  tool_calls integer,
+  -- For a scheduled run: its schedule, and the last status its owner was emailed about.
+  schedule_id text,
+  notified_status text
 );
 
 alter table agent_runs add column if not exists ended_at timestamptz;
@@ -294,6 +297,41 @@ alter table agent_runs add column if not exists tool_calls integer;
 create index if not exists agent_runs_agent_id_idx on agent_runs (agent_id, created_at desc);
 
 alter table agent_runs enable row level security;
+
+-- Schedules: an agent run at set times, with the same request each time. The
+-- agent runtime fires the runs (an Anthropic "deployment"); this table says
+-- which exist and whose they are.
+create table if not exists agent_schedules (
+  id text primary key,
+  agent_id text not null references agents(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  -- What the agent is asked on each run.
+  prompt text not null,
+  cron text not null,
+  timezone text not null,
+  -- How the schedule reads to a person, e.g. "Weekdays at 08:00".
+  label text not null,
+  -- The runtime's id for the schedule.
+  deployment_id text not null unique,
+  status text not null default 'active' check (status in ('active', 'paused')),
+  -- Email the owner each run's result (they're always emailed when a run needs approval or fails).
+  email_results boolean not null default false,
+  -- Runs up to this time have been copied into agent_runs.
+  synced_to timestamptz
+);
+
+create index if not exists agent_schedules_agent_id_idx on agent_schedules (agent_id, created_at);
+create index if not exists agent_schedules_user_id_idx on agent_schedules (user_id);
+
+alter table agent_schedules enable row level security;
+
+-- Scheduled runs: which schedule started a run, and the last status its owner
+-- was emailed about (so a repeated notification isn't sent twice).
+alter table agent_runs add column if not exists schedule_id text;
+alter table agent_runs add column if not exists notified_status text;
+alter table agent_runs drop constraint if exists agent_runs_source_check;
+alter table agent_runs add constraint agent_runs_source_check check (source in ('playground', 'endpoint', 'schedule'));
 
 -- ---- Connected apps ------------------------------------------------------------
 -- Sessions with the app provider (Composio; apps/api/src/apps/composio.ts). A

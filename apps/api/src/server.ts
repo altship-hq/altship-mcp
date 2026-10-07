@@ -58,6 +58,7 @@ import { MemoryError, deleteCollection, deleteRecord, listRecords, renameCollect
 import { MAX_IMPORT_NOTES, planImport } from "./memory/import.js";
 import { MAX_TOPICS, collectionsOf, deployedMemoryTools } from "./memory/tools.js";
 import { listConnections, revokeConnection } from "./end-users/store.js";
+import { anthropicWebhook } from "./agents/webhooks.js";
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "http://localhost:5173")
   .split(",")
@@ -77,6 +78,9 @@ function specInput(body: Record<string, unknown> | undefined): SpecInput | null 
 }
 
 export const app = express();
+// Notifications from the agent runtime are signed over the exact bytes sent,
+// so this route reads the body raw and comes before the JSON parser.
+app.post("/api/anthropic/webhooks", express.raw({ type: "*/*", limit: "1mb" }), anthropicWebhook);
 // Uploaded OpenAPI specs travel in the JSON body, so allow large ones.
 app.use(express.json({ limit: "6mb" }));
 app.use(express.urlencoded({ extended: false }));

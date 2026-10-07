@@ -34,7 +34,7 @@ export interface AgentRunLog {
   agentId: string;
   agentName: string;
   createdAt: string;
-  source: "playground" | "endpoint";
+  source: "playground" | "endpoint" | "schedule";
   status: "running" | "requires_action" | "completed" | "failed";
   inputPreview: string | null;
   outputPreview: string | null;

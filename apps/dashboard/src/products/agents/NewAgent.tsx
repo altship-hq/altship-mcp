@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, navigate } from "../../router.js";
 import { LoadingOverlay, PageHead } from "../../ui.js";
 import AppsPicker from "./AppsPicker.js";
@@ -24,6 +24,7 @@ import {
   BUILTIN_LABELS,
   toolCountOf,
 } from "./api.js";
+import { findTemplate, type AgentTemplate } from "./agentTemplates.js";
 
 const MODELS: { id: AgentModel; label: string }[] = [
   { id: "claude-opus-5", label: "Claude Opus 5" },
@@ -39,10 +40,13 @@ const ROLE_LABEL: Record<PlannedAgent["role"], string> = {
 
 /** Describe → review the proposed plan → approve. Nothing is created until Approve. */
 export default function NewAgent() {
-  const focusDeploymentId = new URLSearchParams(window.location.search).get("server") ?? undefined;
+  const query = new URLSearchParams(window.location.search);
+  const focusDeploymentId = query.get("server") ?? undefined;
+  // A template fills the form in; everything it sets can be changed.
+  const [template] = useState(() => findTemplate(query.get("template")));
   const [catalog, setCatalog] = useState<Catalog | null>(null);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
+  const [name, setName] = useState(template?.name ?? "");
+  const [description, setDescription] = useState(template?.description ?? "");
   // The plan being reviewed, with undo and redo. Null until there is one.
   const history = useHistory<AgentPlan | null>(null);
   const plan = history.value;
@@ -52,8 +56,8 @@ export default function NewAgent() {
   const [error, setError] = useState<string | null>(null);
   // Tools the agent may use. No MCP server is required: web is on by default,
   // the sandbox off, and servers start unticked (except one you came from).
-  const [useWeb, setUseWeb] = useState(true);
-  const [useSandbox, setUseSandbox] = useState(false);
+  const [useWeb, setUseWeb] = useState(template?.web ?? true);
+  const [useSandbox, setUseSandbox] = useState(template?.sandbox ?? false);
   const [picked, setPicked] = useState<Set<string>>(() => new Set(focusDeploymentId ? [focusDeploymentId] : []));
   // Connected apps (Gmail, Slack, ...) ticked for this agent, by slug.
   const [pickedApps, setPickedApps] = useState<Set<string>>(() => new Set());
@@ -77,6 +81,8 @@ export default function NewAgent() {
     () => new Map((catalog?.servers ?? []).filter((s) => picked.has(s.deploymentId) || isAppsServer(s)).map((s) => [s.name, s])),
     [catalog, picked],
   );
+
+  const pickedServers = (catalog?.servers ?? []).filter((s) => picked.has(s.deploymentId));
 
   async function runPlanner(revise: boolean) {
     setBusy("planning");
@@ -147,6 +153,7 @@ export default function NewAgent() {
         />
         {error && <div className="notice">{error}</div>}
         <div className="agent-form">
+          {template && <TemplateNeeds template={template} pickedApps={pickedApps} pickedServers={pickedServers} />}
           <label htmlFor="agent-name">Name</label>
           <input id="agent-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Support triage" />
 
@@ -160,6 +167,7 @@ export default function NewAgent() {
           />
 
           <ToolPicker
+            requiredApps={template?.apps}
             pickedApps={pickedApps}
             onToggleApp={(slug, on) =>
               setPickedApps((current) => {
@@ -329,8 +337,86 @@ function sameKindOfEdit(previous: AgentPlan | null, next: AgentPlan | null): boo
   return previous !== null && next !== null && shape(previous) === shape(next);
 }
 
+/** A memory is an MCP server whose tools are altship's memory tools. */
+const isMemory = (server: CatalogServer) => server.tools.some((t) => t.name.startsWith("memory."));
+
+/**
+ * What the template needs and whether the form has it yet. A reminder, not a
+ * gate: the plan is proposed from whatever is ticked.
+ */
+function TemplateNeeds({ template, pickedApps, pickedServers }: { template: AgentTemplate; pickedApps: Set<string>; pickedServers: CatalogServer[] }) {
+  const needs: { label: string; ready: boolean; todo: ReactNode }[] = [
+    ...template.apps.map((app) => ({
+      label: app.name,
+      ready: pickedApps.has(app.slug),
+      todo: <>Connect it under Connected apps below.</>,
+    })),
+    ...(template.memory
+      ? [
+          {
+            label: "A memory",
+            ready: pickedServers.some(isMemory),
+            todo: (
+              <>
+                {template.memory} Tick one under Your MCP servers, or{" "}
+                <Link to="mcp/memory/new" className="inline-link">
+                  create a memory
+                </Link>{" "}
+                first.
+              </>
+            ),
+          },
+        ]
+      : []),
+    ...(template.ownApi
+      ? [
+          {
+            label: "Your own API",
+            ready: pickedServers.some((s) => !isMemory(s)),
+            todo: (
+              <>
+                {template.ownApi} Tick it under Your MCP servers, or{" "}
+                <Link to="mcp/new" className="inline-link">
+                  build one from your API spec
+                </Link>{" "}
+                first.
+              </>
+            ),
+          },
+        ]
+      : []),
+  ];
+  const missing = needs.filter((n) => !n.ready).length;
+
+  return (
+    <div className={missing > 0 ? "plan-panel warn template-needs-panel" : "plan-panel template-needs-panel"}>
+      <h3>From the template “{template.name}”</h3>
+      {needs.length === 0 ? (
+        <p className="hint">Nothing to set up. Change anything below, then propose a plan.</p>
+      ) : (
+        <>
+          <ul className="needs-list">
+            {needs.map((n) => (
+              <li key={n.label} className={n.ready ? "is-ready" : ""}>
+                <strong>{n.label}</strong>
+                <span>{n.ready ? "Ready" : n.todo}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="hint">
+            {missing > 0
+              ? "The plan only uses what's ticked below, so the agent can't do these parts until they're added."
+              : "Everything it needs is ticked. Change anything below, then propose a plan."}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 /** Which tools the agent may use: built-in ones (no MCP server needed) and any of your MCP servers. */
 function ToolPicker({
+  requiredApps,
   pickedApps,
   onToggleApp,
   catalog,
@@ -341,6 +427,8 @@ function ToolPicker({
   onSandbox,
   onToggleServer,
 }: {
+  /** A template's apps: listed first, and ticked when already connected. */
+  requiredApps?: { slug: string; name: string }[];
   pickedApps: Set<string>;
   onToggleApp: (slug: string, on: boolean) => void;
   catalog: Catalog | null;
@@ -405,7 +493,7 @@ function ToolPicker({
         <p className="hint">Can't be used by agents: {catalog.unavailable.map((u) => `${u.title} (${u.reason})`).join("; ")}</p>
       )}
 
-      <AppsPicker picked={pickedApps} onToggle={onToggleApp} />
+      <AppsPicker picked={pickedApps} onToggle={onToggleApp} required={requiredApps} />
     </fieldset>
   );
 }

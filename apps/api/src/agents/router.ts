@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
-import { BUILTIN_TOOLS, PlanError, compileFlow, validatePlan, type AgentPlan, type BuiltinTool } from "@altship/agent-design";
+import { BUILTIN_TOOLS, PlanError, ScheduleError, compileFlow, validatePlan, type AgentPlan, type BuiltinTool, type ScheduleFrequency } from "@altship/agent-design";
 import { AgentConfigError } from "./anthropic.js";
 import { PLANS, planOf, retentionCutoff } from "../plans.js";
 import { appsCatalogEntry, loadCatalog, publicEntry, serversUsedBy, toToolCatalog, type CatalogEntry } from "./catalog.js";
@@ -10,9 +10,24 @@ import { planAgent, PlannerError } from "./planner.js";
 import { confirmToolCall, createAgentVault, createManagedAgents, followSession, sendUserMessage, startSession } from "./runtime.js";
 import { requireAuth, userIdOf } from "../auth.js";
 import {
+  ScheduleLimitError,
+  createSchedule,
+  nextRuns,
+  removeSchedule,
+  runEmailsEnabled,
+  runScheduleNow,
+  scheduleAllowance,
+  setSchedulePaused,
+  syncScheduledRuns,
+} from "./schedules.js";
+import {
   getAgent,
   getRun,
+  getSchedule,
   insertAgent,
+  listScheduledAgentIds,
+  listSchedules,
+  updateSchedule,
   insertRun,
   listRunsForAgents,
   listAgents,
@@ -20,6 +35,7 @@ import {
   setAgentVault,
   updateRun,
   type AgentRecord,
+  type ScheduleRecord,
 } from "./store.js";
 
 // Agent Creator API. Dashboard routes need a signed-in user and only see that
@@ -134,6 +150,13 @@ agentsRouter.get("/runs", async (req, res) => {
 
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
   const before = typeof req.query.before === "string" && !Number.isNaN(Date.parse(req.query.before)) ? req.query.before : undefined;
+  // On the newest page, pick up what scheduled agents have run since last time. Best effort.
+  if (!before) {
+    const scheduled = await listScheduledAgentIds(userIdOf(req)).catch(() => new Set<string>());
+    await Promise.all(
+      wanted.filter((a) => scheduled.has(a.id)).map((a) => syncScheduledRuns(a).catch((err) => console.error("Schedule sync failed:", errorMessage(err)))),
+    );
+  }
   // Only what the account's plan keeps is shown (older runs are deleted daily).
   const plan = await planOf(userIdOf(req));
   // One extra row tells us whether there's another page.
@@ -155,8 +178,82 @@ agentsRouter.get("/:id", async (req, res) => {
 
 agentsRouter.get("/:id/runs", async (req, res) => {
   const agent = await requireAgent(req, res);
-  if (agent) res.json(await listRuns(agent.id, retentionCutoff(await planOf(agent.userId))));
+  if (!agent) return;
+  // Scheduled runs happen away from here: bring the log up to date first. Best effort, so the log still shows.
+  await syncScheduledRuns(agent).catch((err) => console.error("Schedule sync failed:", errorMessage(err)));
+  res.json(await listRuns(agent.id, retentionCutoff(await planOf(agent.userId))));
 });
+
+// ---- Schedules ----------------------------------------------------------
+
+agentsRouter.get("/:id/schedules", async (req, res) => {
+  const agent = await requireAgent(req, res);
+  if (!agent) return;
+  const schedules = await listSchedules(agent.id);
+  const [next, allowance] = await Promise.all([nextRuns(schedules), scheduleAllowance(agent.userId)]);
+  res.json({
+    schedules: schedules.map((s) => publicSchedule(s, next.get(s.id) ?? null)),
+    ...allowance,
+    // Whether the owner is emailed about runs, so the page doesn't promise what isn't set up.
+    emails: runEmailsEnabled(),
+  });
+});
+
+agentsRouter.post("/:id/schedules", async (req, res) => {
+  const agent = await requireAgent(req, res);
+  if (!agent) return;
+  const body = req.body ?? {};
+  const schedule = await createSchedule(await withVault(agent), {
+    frequency: body.frequency as ScheduleFrequency,
+    time: body.time,
+    weekday: body.weekday,
+    timezone: body.timezone,
+    prompt: typeof body.prompt === "string" ? body.prompt : "",
+    emailResults: body.emailResults === true,
+  });
+  const next = await nextRuns([schedule]);
+  res.status(201).json(publicSchedule(schedule, next.get(schedule.id) ?? null));
+});
+
+agentsRouter.patch("/:id/schedules/:scheduleId", async (req, res) => {
+  const found = await requireSchedule(req, res);
+  if (!found) return;
+  const { paused, emailResults } = req.body ?? {};
+  if (typeof paused === "boolean") await setSchedulePaused(found.schedule, paused);
+  if (typeof emailResults === "boolean") await updateSchedule(found.schedule.id, { emailResults });
+  const schedule = (await getSchedule(found.agent.id, found.schedule.id))!;
+  const next = await nextRuns([schedule]);
+  res.json(publicSchedule(schedule, next.get(schedule.id) ?? null));
+});
+
+agentsRouter.delete("/:id/schedules/:scheduleId", async (req, res) => {
+  const found = await requireSchedule(req, res);
+  if (!found) return;
+  await removeSchedule(found.schedule);
+  res.json({ ok: true });
+});
+
+agentsRouter.post("/:id/schedules/:scheduleId/run", async (req, res) => {
+  const found = await requireSchedule(req, res);
+  if (!found) return;
+  res.status(202).json({ sessionId: await runScheduleNow(found.schedule) });
+});
+
+/** A schedule as the dashboard sees it: no runtime ids. */
+function publicSchedule(s: ScheduleRecord, nextRunAt: string | null) {
+  return { id: s.id, createdAt: s.createdAt, prompt: s.prompt, label: s.label, timezone: s.timezone, status: s.status, emailResults: s.emailResults, nextRunAt };
+}
+
+async function requireSchedule(req: Request, res: Response): Promise<{ agent: AgentRecord; schedule: ScheduleRecord } | null> {
+  const agent = await requireAgent(req, res);
+  if (!agent) return null;
+  const schedule = await getSchedule(agent.id, String(req.params.scheduleId));
+  if (!schedule) {
+    res.status(404).json({ error: "Schedule not found." });
+    return null;
+  }
+  return { agent, schedule };
+}
 
 // ---- Playground ---------------------------------------------------------
 
@@ -298,7 +395,9 @@ function errorMessage(err: unknown): string {
 /** Maps known failures to useful HTTP errors; mounted after the router in server.ts. */
 export function agentsErrorHandler(err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) {
   if (res.headersSent) return next(err);
-  if (err instanceof PlanError || err instanceof PlannerError) return res.status(400).json({ error: err.message });
+  if (err instanceof PlanError || err instanceof PlannerError || err instanceof ScheduleError || err instanceof ScheduleLimitError) {
+    return res.status(400).json({ error: err.message });
+  }
   if (err instanceof AgentConfigError) return res.status(500).json({ error: err.message });
   if (err instanceof AppsConfigError) return res.status(503).json({ error: err.message });
   if (err instanceof Anthropic.APIError) {

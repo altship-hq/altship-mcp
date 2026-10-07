@@ -7,12 +7,19 @@ import { getSupabase } from "./supabase.js";
 export interface PlanLimits {
   /** How many days of Observability history (tool calls, agent runs) are kept and shown. */
   retentionDays: number;
+  /** How many schedules an account's agents may have between them. */
+  schedules: number;
+  /**
+   * The most one scheduled run may cost, in US cents. Scheduled runs happen
+   * with nobody watching, so each is capped; a run that reaches it stops.
+   */
+  scheduledRunCents: number;
 }
 
 export const PLANS = {
-  free: { retentionDays: 7 },
-  // Placeholder for the first paid tier; the number isn't a pricing decision yet.
-  pro: { retentionDays: 30 },
+  free: { retentionDays: 7, schedules: 3, scheduledRunCents: 100 },
+  // Placeholder for the first paid tier; the numbers aren't a pricing decision yet.
+  pro: { retentionDays: 30, schedules: 20, scheduledRunCents: 300 },
 } as const satisfies Record<string, PlanLimits>;
 
 export type PlanName = keyof typeof PLANS;

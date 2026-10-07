@@ -3,6 +3,7 @@ import { Link } from "../../router.js";
 import { PageHead } from "../../ui.js";
 import FlowEditor from "./FlowEditor.js";
 import Markdown from "./Markdown.js";
+import Schedule from "./Schedule.js";
 import {
   confirmPlaygroundTool,
   endpointUrl,
@@ -20,7 +21,7 @@ import {
   toolCountOf,
 } from "./api.js";
 
-type Tab = "playground" | "flow" | "deploy" | "runs";
+type Tab = "playground" | "flow" | "deploy" | "schedule" | "runs";
 
 export default function AgentDetail({ id, tab }: { id: string; tab: Tab }) {
   const [agent, setAgent] = useState<AgentRecord | null>(null);
@@ -58,6 +59,9 @@ export default function AgentDetail({ id, tab }: { id: string; tab: Tab }) {
         <Link to={`agents/${id}/deploy`} aria-current={tab === "deploy" ? "page" : undefined}>
           Deploy
         </Link>
+        <Link to={`agents/${id}/schedule`} aria-current={tab === "schedule" ? "page" : undefined}>
+          Schedule
+        </Link>
         <Link to={`agents/${id}/runs`} aria-current={tab === "runs" ? "page" : undefined}>
           Runs
         </Link>
@@ -71,6 +75,7 @@ export default function AgentDetail({ id, tab }: { id: string; tab: Tab }) {
         </>
       )}
       {tab === "deploy" && <Deploy agent={agent} />}
+      {tab === "schedule" && <Schedule agent={agent} />}
       {tab === "runs" && <Runs agent={agent} />}
     </>
   );
@@ -88,6 +93,13 @@ function Playground({ agent }: { agent: AgentRecord }) {
   const bottom = useRef<HTMLDivElement>(null);
 
   useEffect(() => () => stopFollowing.current?.(), []);
+  // Opened on one run (from the run log, a schedule or an email): show it, and carry on from there.
+  useEffect(() => {
+    const opened = new URLSearchParams(window.location.search).get("session");
+    if (!opened) return;
+    setSessionId(opened);
+    follow(opened);
+  }, [agent.id]);
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end", behavior: "smooth" });
   }, [events.length, working]);
@@ -511,6 +523,10 @@ const STATUS_LABEL: Record<RunStatus, string> = {
   failed: "Failed",
 };
 
+const SOURCE_LABEL: Record<AgentRun["source"], string> = { playground: "Playground", endpoint: "API", schedule: "Schedule" };
+
+const started = (run: AgentRun) => new Date(run.createdAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+
 function Runs({ agent }: { agent: AgentRecord }) {
   const [runs, setRuns] = useState<AgentRun[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -526,7 +542,7 @@ function Runs({ agent }: { agent: AgentRecord }) {
 
   if (error) return <div className="notice">Couldn't load runs: {error}</div>;
   if (runs === null) return <div className="empty">Loading…</div>;
-  if (runs.length === 0) return <div className="empty">No runs yet. Try the agent in the Playground or call its endpoint.</div>;
+  if (runs.length === 0) return <div className="empty">No runs yet. Try the agent in the Playground, call its endpoint, or put it on a schedule.</div>;
 
   return (
     <div className="table-wrap">
@@ -543,8 +559,17 @@ function Runs({ agent }: { agent: AgentRecord }) {
         <tbody>
           {runs.map((r) => (
             <tr key={r.sessionId}>
-              <td className="date">{new Date(r.createdAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</td>
-              <td>{r.source === "endpoint" ? "API" : "Playground"}</td>
+              <td className="date">
+                {/* A run that never started has nothing to open. */}
+                {r.sessionId.startsWith("drun_") ? (
+                  started(r)
+                ) : (
+                  <Link to={`agents/${agent.id}?session=${encodeURIComponent(r.sessionId)}`} className="row-link">
+                    {started(r)}
+                  </Link>
+                )}
+              </td>
+              <td>{SOURCE_LABEL[r.source]}</td>
               <td>
                 <span className={`status-tag ${r.status}`}>{STATUS_LABEL[r.status]}</span>
               </td>

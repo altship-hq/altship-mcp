@@ -65,12 +65,27 @@ function AppRow({
   );
 }
 
-/** Renders nothing when connected apps aren't set up on this altship. */
-export default function AppsPicker({ picked, onToggle }: { picked: Set<string>; onToggle: (slug: string, on: boolean) => void }) {
+/**
+ * Renders nothing when connected apps aren't set up on this altship.
+ * `required` (a template's apps) are listed first, and ticked to begin with
+ * when the user has already connected them.
+ */
+export default function AppsPicker({
+  picked,
+  onToggle,
+  required = [],
+}: {
+  picked: Set<string>;
+  onToggle: (slug: string, on: boolean) => void;
+  required?: { slug: string; name: string }[];
+}) {
   const [enabled, setEnabled] = useState<boolean | null>(null);
   // For the form: the user's connected apps, and the first page of all apps to suggest from.
   const [connected, setConnected] = useState<AppInfo[]>([]);
   const [suggested, setSuggested] = useState<AppInfo[]>([]);
+  // The required apps as the provider lists them, looked up once.
+  const [requiredApps, setRequiredApps] = useState<AppInfo[]>([]);
+  const requiredLoaded = useRef(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // The app whose sign-in tab is open, so coming back to this tab can tick it.
@@ -91,6 +106,15 @@ export default function AppsPicker({ picked, onToggle }: { picked: Set<string>; 
       setEnabled(first.enabled);
       setConnected(mine.apps);
       setSuggested(first.apps);
+      if (required.length > 0 && !requiredLoaded.current) {
+        requiredLoaded.current = true;
+        const known = new Map([...first.apps, ...mine.apps].map((a) => [a.slug, a]));
+        const found = await Promise.all(
+          required.map(async (r) => known.get(r.slug) ?? (await listApps({ search: r.name })).apps.find((a) => a.slug === r.slug) ?? null),
+        );
+        setRequiredApps(found.filter((a): a is AppInfo => a !== null));
+        for (const r of required) if (mine.apps.some((a) => a.slug === r.slug)) onToggle(r.slug, true);
+      }
       const justConnected = connecting.current;
       if (justConnected && mine.apps.some((a) => a.slug === justConnected)) {
         connecting.current = null;
@@ -189,9 +213,12 @@ export default function AppsPicker({ picked, onToggle }: { picked: Set<string>; 
 
   // Everything the user has connected, then widely used apps to fill the list out.
   const connectedSlugs = new Set(connected.map((a) => a.slug));
-  const inline = [...connected, ...suggested.filter((a) => !connectedSlugs.has(a.slug)).slice(0, Math.max(INLINE_COUNT - connected.length, 0))];
-  // A row in the modal reflects a connection made since its list loaded.
+  // A row reflects a connection made since its list loaded.
   const current = (app: AppInfo) => (connectedSlugs.has(app.slug) ? { ...app, connected: true } : app);
+  const requiredSlugs = new Set(requiredApps.map((a) => a.slug));
+  const others = [...connected, ...suggested.filter((a) => !connectedSlugs.has(a.slug))].filter((a) => !requiredSlugs.has(a.slug));
+  const shownOthers = Math.max(connected.filter((a) => !requiredSlugs.has(a.slug)).length, INLINE_COUNT - requiredApps.length);
+  const inline = [...requiredApps.map(current), ...others.slice(0, shownOthers)];
   const row = (app: AppInfo) => (
     <AppRow
       key={app.slug}

@@ -1,4 +1,4 @@
-import { API_BASE, apiFetch, deleteJson, getJson, postJson } from "../../http.js";
+import { API_BASE, apiFetch, deleteJson, getJson, patchJson, postJson } from "../../http.js";
 
 // Mirrors apps/api/src/agents (router, events) and packages/agent-design types.
 
@@ -128,7 +128,7 @@ export type RunStatus = "running" | "requires_action" | "completed" | "failed";
 export interface AgentRun {
   sessionId: string;
   createdAt: string;
-  source: "playground" | "endpoint";
+  source: "playground" | "endpoint" | "schedule";
   status: RunStatus;
   inputPreview: string | null;
   outputPreview: string | null;
@@ -332,6 +332,58 @@ export function getAgent(id: string): Promise<AgentRecord> {
 
 export function listRuns(id: string): Promise<AgentRun[]> {
   return getJson<AgentRun[]>(`/api/agents/${id}/runs`);
+}
+
+// ---- Schedules ----------------------------------------------------------
+
+export type ScheduleFrequency = "hourly" | "daily" | "weekdays" | "weekly";
+
+/** An agent run at set times, with the same request each time. */
+export interface AgentSchedule {
+  id: string;
+  createdAt: string;
+  /** What the agent is asked on each run. */
+  prompt: string;
+  /** How it reads, e.g. "Weekdays at 08:00". */
+  label: string;
+  timezone: string;
+  status: "active" | "paused";
+  emailResults: boolean;
+  /** Null when paused, or when it couldn't be read. */
+  nextRunAt: string | null;
+}
+
+export interface ScheduleList {
+  schedules: AgentSchedule[];
+  /** Schedules across all of the account's agents, and how many its plan allows. */
+  used: number;
+  limit: number;
+  /** Whether the owner is emailed about scheduled runs on this altship. */
+  emails: boolean;
+}
+
+export function listSchedules(agentId: string): Promise<ScheduleList> {
+  return getJson(`/api/agents/${agentId}/schedules`);
+}
+
+export function createSchedule(
+  agentId: string,
+  schedule: { frequency: ScheduleFrequency; time: string; weekday: number; timezone: string; prompt: string; emailResults: boolean },
+): Promise<AgentSchedule> {
+  return postJson(`/api/agents/${agentId}/schedules`, schedule);
+}
+
+export function updateSchedule(agentId: string, scheduleId: string, change: { paused?: boolean; emailResults?: boolean }): Promise<AgentSchedule> {
+  return patchJson(`/api/agents/${agentId}/schedules/${scheduleId}`, change);
+}
+
+export function deleteSchedule(agentId: string, scheduleId: string): Promise<{ ok: true }> {
+  return deleteJson(`/api/agents/${agentId}/schedules/${scheduleId}`);
+}
+
+/** Runs a schedule's request once, now; resolves to the run to open. */
+export function runScheduleNow(agentId: string, scheduleId: string): Promise<{ sessionId: string }> {
+  return postJson(`/api/agents/${agentId}/schedules/${scheduleId}/run`, {});
 }
 
 export function startPlaygroundSession(id: string): Promise<{ sessionId: string }> {

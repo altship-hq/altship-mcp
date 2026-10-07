@@ -28,7 +28,7 @@ interface AgentRow {
   vault_id: string | null;
 }
 
-export type RunSource = "playground" | "endpoint";
+export type RunSource = "playground" | "endpoint" | "schedule";
 export type RunStatus = "running" | "requires_action" | "completed" | "failed";
 
 export interface AgentRunRecord {
@@ -43,6 +43,8 @@ export interface AgentRunRecord {
   endedAt: string | null;
   /** Tool calls the agent made; null on runs from before this was recorded. */
   toolCalls: number | null;
+  /** The schedule that started the run, for a scheduled one. */
+  scheduleId: string | null;
 }
 
 interface AgentRunRow {
@@ -55,6 +57,7 @@ interface AgentRunRow {
   output_preview: string | null;
   ended_at?: string | null;
   tool_calls?: number | null;
+  schedule_id?: string | null;
 }
 
 const PREVIEW_LENGTH = 280;
@@ -85,6 +88,7 @@ function fromRunRow(row: AgentRunRow): AgentRunRecord {
     outputPreview: row.output_preview,
     endedAt: row.ended_at ?? null,
     toolCalls: row.tool_calls ?? null,
+    scheduleId: row.schedule_id ?? null,
   };
 }
 
@@ -192,4 +196,191 @@ export async function listRunsForAgents(agentIds: string[], options: { limit: nu
   const { data, error } = await query;
   if (error) throw new Error(`Failed to list runs: ${error.message}`);
   return (data as AgentRunRow[]).map(fromRunRow);
+}
+
+// ---- Schedules ----------------------------------------------------------
+
+export interface ScheduleRecord {
+  id: string;
+  agentId: string;
+  userId: string;
+  createdAt: string;
+  /** What the agent is asked on each run. */
+  prompt: string;
+  cron: string;
+  timezone: string;
+  /** How the schedule reads to a person, e.g. "Weekdays at 08:00". */
+  label: string;
+  /** The runtime's id for the schedule (an Anthropic deployment). */
+  deploymentId: string;
+  status: "active" | "paused";
+  emailResults: boolean;
+  /** Runs up to this time have been copied into agent_runs. */
+  syncedTo: string | null;
+}
+
+interface ScheduleRow {
+  id: string;
+  agent_id: string;
+  user_id: string;
+  created_at: string;
+  prompt: string;
+  cron: string;
+  timezone: string;
+  label: string;
+  deployment_id: string;
+  status: "active" | "paused";
+  email_results: boolean;
+  synced_to: string | null;
+}
+
+function fromScheduleRow(row: ScheduleRow): ScheduleRecord {
+  return {
+    id: row.id,
+    agentId: row.agent_id,
+    userId: row.user_id,
+    createdAt: row.created_at,
+    prompt: row.prompt,
+    cron: row.cron,
+    timezone: row.timezone,
+    label: row.label,
+    deploymentId: row.deployment_id,
+    status: row.status,
+    emailResults: row.email_results,
+    syncedTo: row.synced_to,
+  };
+}
+
+export async function insertSchedule(record: Omit<ScheduleRecord, "createdAt" | "status" | "syncedTo">): Promise<ScheduleRecord> {
+  const { data, error } = await getSupabase()
+    .from("agent_schedules")
+    .insert({
+      id: record.id,
+      agent_id: record.agentId,
+      user_id: record.userId,
+      prompt: record.prompt,
+      cron: record.cron,
+      timezone: record.timezone,
+      label: record.label,
+      deployment_id: record.deploymentId,
+      email_results: record.emailResults,
+    })
+    .select("*")
+    .single();
+  if (error) throw new Error(`Failed to save schedule: ${error.message}`);
+  return fromScheduleRow(data as ScheduleRow);
+}
+
+export async function listSchedules(agentId: string): Promise<ScheduleRecord[]> {
+  const { data, error } = await getSupabase().from("agent_schedules").select("*").eq("agent_id", agentId).order("created_at", { ascending: true });
+  if (error) throw new Error(`Failed to list schedules: ${error.message}`);
+  return (data as ScheduleRow[]).map(fromScheduleRow);
+}
+
+export async function getSchedule(agentId: string, scheduleId: string): Promise<ScheduleRecord | null> {
+  const { data, error } = await getSupabase().from("agent_schedules").select("*").eq("agent_id", agentId).eq("id", scheduleId).maybeSingle();
+  if (error) throw new Error(`Failed to load schedule: ${error.message}`);
+  return data ? fromScheduleRow(data as ScheduleRow) : null;
+}
+
+export async function getScheduleByDeployment(deploymentId: string): Promise<ScheduleRecord | null> {
+  const { data, error } = await getSupabase().from("agent_schedules").select("*").eq("deployment_id", deploymentId).maybeSingle();
+  if (error) throw new Error(`Failed to load schedule: ${error.message}`);
+  return data ? fromScheduleRow(data as ScheduleRow) : null;
+}
+
+/** The ids of the account's agents that run on a schedule. */
+export async function listScheduledAgentIds(userId: string): Promise<Set<string>> {
+  const { data, error } = await getSupabase().from("agent_schedules").select("agent_id").eq("user_id", userId);
+  if (error) throw new Error(`Failed to list schedules: ${error.message}`);
+  return new Set((data as { agent_id: string }[]).map((row) => row.agent_id));
+}
+
+/** How many schedules the account's agents have between them. */
+export async function countSchedules(userId: string): Promise<number> {
+  const { count, error } = await getSupabase().from("agent_schedules").select("id", { count: "exact", head: true }).eq("user_id", userId);
+  if (error) throw new Error(`Failed to count schedules: ${error.message}`);
+  return count ?? 0;
+}
+
+export async function updateSchedule(scheduleId: string, update: { status?: "active" | "paused"; emailResults?: boolean; syncedTo?: string }) {
+  const { error } = await getSupabase()
+    .from("agent_schedules")
+    .update({
+      ...(update.status ? { status: update.status } : {}),
+      ...(update.emailResults !== undefined ? { email_results: update.emailResults } : {}),
+      ...(update.syncedTo ? { synced_to: update.syncedTo } : {}),
+    })
+    .eq("id", scheduleId);
+  if (error) throw new Error(`Failed to update schedule: ${error.message}`);
+}
+
+export async function deleteSchedule(scheduleId: string) {
+  const { error } = await getSupabase().from("agent_schedules").delete().eq("id", scheduleId);
+  if (error) throw new Error(`Failed to delete schedule: ${error.message}`);
+}
+
+/**
+ * Records a run a schedule started, unless it's already recorded (the webhook
+ * and the on-view sync can both see the same run). A run that never got a
+ * session is recorded as failed, under the runtime's id for the attempt.
+ */
+export async function recordScheduledRun(run: {
+  sessionId: string;
+  schedule: ScheduleRecord;
+  startedAt: string;
+  failure?: string;
+}) {
+  const { error } = await getSupabase()
+    .from("agent_runs")
+    .upsert(
+      {
+        session_id: run.sessionId,
+        agent_id: run.schedule.agentId,
+        created_at: run.startedAt,
+        source: "schedule",
+        schedule_id: run.schedule.id,
+        status: run.failure ? "failed" : "running",
+        input_preview: preview(run.schedule.prompt),
+        ...(run.failure ? { output_preview: preview(run.failure), ended_at: run.startedAt } : {}),
+      },
+      { onConflict: "session_id", ignoreDuplicates: true },
+    );
+  if (error) throw new Error(`Failed to record run: ${error.message}`);
+}
+
+/** A run by its session alone, for the webhook (which isn't acting for a signed-in user). */
+export async function getRunBySession(sessionId: string): Promise<AgentRunRecord | null> {
+  const { data, error } = await getSupabase().from("agent_runs").select("*").eq("session_id", sessionId).maybeSingle();
+  if (error) throw new Error(`Failed to load run: ${error.message}`);
+  return data ? fromRunRow(data as AgentRunRow) : null;
+}
+
+/** Scheduled runs of an agent that haven't settled yet, oldest first. */
+export async function listUnsettledScheduledRuns(agentId: string, limit: number): Promise<AgentRunRecord[]> {
+  const { data, error } = await getSupabase()
+    .from("agent_runs")
+    .select("*")
+    .eq("agent_id", agentId)
+    .eq("source", "schedule")
+    .eq("status", "running")
+    .order("created_at", { ascending: true })
+    .limit(limit);
+  if (error) throw new Error(`Failed to list runs: ${error.message}`);
+  return (data as AgentRunRow[]).map(fromRunRow);
+}
+
+/**
+ * Claims the right to email a run's owner about `status`: true the first time
+ * for that status, false after, so a repeated webhook doesn't send twice.
+ */
+export async function claimRunNotification(sessionId: string, status: RunStatus): Promise<boolean> {
+  const { data, error } = await getSupabase()
+    .from("agent_runs")
+    .update({ notified_status: status })
+    .eq("session_id", sessionId)
+    .or(`notified_status.is.null,notified_status.neq.${status}`)
+    .select("session_id");
+  if (error) throw new Error(`Failed to record notification: ${error.message}`);
+  return (data ?? []).length > 0;
 }
