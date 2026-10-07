@@ -418,8 +418,9 @@ function Canvas({ plan, onChange, servers = new Map(), allowedBuiltins = [], his
           <>
             <h3>How the flow runs</h3>
             <p className="flow-help">
-              A coordinator follows the flow step by step: it hands work to each agent, calls tool steps itself and takes one route
-              at each router. Select a step to edit it.
+              altship runs the flow as drawn. A coordinator is given one step at a time: it hands work to each agent and calls
+              tool steps itself, and each step is checked before the next starts. Routers are decided by altship and can only
+              take a route drawn here. Select a step to edit it.
             </p>
             <label>
               Coordinator model

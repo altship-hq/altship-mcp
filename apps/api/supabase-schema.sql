@@ -288,9 +288,16 @@ create table if not exists agent_runs (
   tool_calls integer,
   -- For a scheduled run: its schedule, and the last status its owner was emailed about.
   schedule_id text,
-  notified_status text
+  notified_status text,
+  -- For an agent whose flow altship runs step by step: where the flow has got
+  -- to, and a counter that goes up with every change (so two followers of one
+  -- run can't both send the next step).
+  flow_state jsonb,
+  flow_rev integer not null default 0
 );
 
+alter table agent_runs add column if not exists flow_state jsonb;
+alter table agent_runs add column if not exists flow_rev integer not null default 0;
 alter table agent_runs add column if not exists ended_at timestamptz;
 alter table agent_runs add column if not exists tool_calls integer;
 

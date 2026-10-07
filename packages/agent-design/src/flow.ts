@@ -1,9 +1,11 @@
+import { enforcedInstructions, isSingleAgentFlow } from "./flow-engine.js";
 import { AGENT_MODELS, type AgentFlow, type AgentModel, type AgentPlan, type FlowEdge, type FlowNode, type PlannedAgent } from "./types.js";
 
 // Execution flows: checking one the user drew, and turning it into the agents
-// that run it. A flow runs as a coordinator whose instructions are the flow
-// written out step by step; the agents in it are the coordinator's specialists,
-// and the tools its tool steps call are the coordinator's own tools.
+// that run it. A flow runs as a coordinator, with the agents in it as its
+// specialists and the tools its tool steps call as its own tools. The
+// coordinator is sent the steps one at a time by the system (flow-engine.ts);
+// agents saved before that have the whole flow as their instructions instead.
 
 export const MAX_FLOW_NODES = 60;
 export const MAX_ROUTES = 12;
@@ -147,6 +149,8 @@ export function normalizeFlow(raw: unknown, agentKeys: Set<string>): AgentFlow {
   return {
     nodes,
     edges,
+    // Whatever the request said: every flow checked here runs under the system's control.
+    enforced: true,
     runner: {
       model: AGENT_MODELS.includes(runner.model as AgentModel) ? (runner.model as AgentModel) : AGENT_MODELS[0],
       instructions: text(runner.instructions, 8000),
@@ -227,16 +231,6 @@ export function flowInstructions(flow: AgentFlow, agents: PlannedAgent[]): strin
   ].join("\n");
 }
 
-/** True when the flow is just Input → one agent → Output: that agent can run on its own. */
-function isSingleAgentFlow(flow: AgentFlow): boolean {
-  if (flow.nodes.length !== 3 || flow.edges.length !== 2) return false;
-  const agent = flow.nodes.find((n) => n.type === "agent");
-  const input = flow.nodes.find((n) => n.type === "input");
-  const output = flow.nodes.find((n) => n.type === "output");
-  if (!agent || !input || !output) return false;
-  return flow.edges.some((e) => e.source === input.id && e.target === agent.id) && flow.edges.some((e) => e.source === agent.id && e.target === output.id);
-}
-
 /**
  * The agents that run a plan. A plan without a flow is returned as is. With
  * one, the result is a coordinator whose instructions are the flow, with the
@@ -273,7 +267,7 @@ export function compileFlow(plan: AgentPlan): AgentPlan {
     role: specialists.length > 0 ? "coordinator" : "solo",
     model: flow.runner.model,
     description: plan.description || `Runs the ${plan.name} workflow.`,
-    instructions: flowInstructions(flow, specialists),
+    instructions: flow.enforced ? enforcedInstructions(plan, flow) : flowInstructions(flow, specialists),
     tools: [...tools.values()],
     builtinTools: [...builtinTools.values()],
   };

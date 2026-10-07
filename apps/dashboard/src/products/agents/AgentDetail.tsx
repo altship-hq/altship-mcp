@@ -70,7 +70,11 @@ export default function AgentDetail({ id, tab }: { id: string; tab: Tab }) {
       {tab === "playground" && <Playground agent={agent} />}
       {tab === "flow" && (
         <>
-          <p className="agent-summary">How this agent works through a request. To change the flow, create a new agent.</p>
+          <p className="agent-summary">
+            {agent.plan.flowGraph?.enforced
+              ? "altship runs these steps in the order drawn: each step is checked before the next starts, and routers can only take a route drawn here. To change the flow, create a new agent."
+              : "How this agent works through a request. It was created before flows were enforced, so it follows these steps as instructions; create a new agent to have them enforced."}
+          </p>
           <FlowEditor plan={withFlow(agent.plan)} />
         </>
       )}
@@ -233,6 +237,7 @@ type TranscriptEntry =
   | { kind: "user" | "agent"; id: string; at: string | null; text: string }
   | { kind: "delegation"; id: string; at: string | null; direction: "sent" | "received"; agent: string; text: string }
   | { kind: "error"; id: string; at: string | null; text: string }
+  | { kind: "step"; id: string; at: string | null; name: string; route: string | null; retry: boolean }
   | {
       kind: "tool";
       id: string;
@@ -264,6 +269,11 @@ function useTranscript(events: AgentUiEvent[]): TranscriptEntry[] {
       switch (e.kind) {
         case "user":
           entries.push({ kind: "user", id: e.id, at: e.at, text: e.text });
+          break;
+        case "step":
+          // The step that opens a pass through the flow carries what the user asked.
+          if (e.request !== null) entries.push({ kind: "user", id: `${e.id}:request`, at: e.at, text: e.request });
+          entries.push({ kind: "step", id: e.id, at: e.at, name: e.name, route: e.route, retry: e.retry });
           break;
         case "message":
           if (e.text) entries.push({ kind: "agent", id: e.id, at: e.at, text: e.text });
@@ -345,7 +355,17 @@ function Turn({
   const steps = turn.items.filter((item) => item !== answer && item.kind !== "error" && !(item.kind === "tool" && item.pending));
 
   const latest = steps[steps.length - 1];
-  const doing = !latest ? "Thinking…" : latest.kind === "tool" ? `Using ${latest.tool}…` : latest.kind === "agent" ? latest.text.split("\n")[0] : "Working…";
+  // In a flow, say which step it's on rather than what the coordinator last wrote.
+  const flowStep = [...steps].reverse().find((item) => item.kind === "step");
+  const doing = !latest
+    ? "Thinking…"
+    : latest.kind === "tool"
+      ? `Using ${latest.tool}…`
+      : flowStep?.kind === "step"
+        ? `${flowStep.name}…`
+        : latest.kind === "agent"
+          ? latest.text.split("\n")[0]
+          : "Working…";
   const startedAt = turn.user?.at ?? turn.items[0]?.at;
   const endedAt = (answer ?? last)?.at;
   const took = startedAt && endedAt ? new Date(endedAt).getTime() - new Date(startedAt).getTime() : null;
@@ -418,6 +438,14 @@ function TranscriptItem({
       );
     case "error":
       return <div className="notice">{item.text}</div>;
+    case "step":
+      return (
+        <div className="flow-step-row">
+          <strong>{item.name}</strong>
+          {item.route && <span>Route taken: {item.route}</span>}
+          {item.retry && <span>Asked again: the step hadn't been carried out</span>}
+        </div>
+      );
     case "delegation":
       return (
         <details className="delegation">

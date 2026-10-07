@@ -4,7 +4,7 @@ import { PLANS, planOf } from "../plans.js";
 import { emailEnabled, sendRunEmail } from "../email.js";
 import { getSupabase } from "../supabase.js";
 import { environmentId, getAnthropic } from "./anthropic.js";
-import { followSession } from "./runtime.js";
+import { followRun } from "./flow-run.js";
 import {
   claimRunNotification,
   countSchedules,
@@ -149,14 +149,18 @@ export async function syncScheduledRuns(agent: AgentRecord) {
       if (latest && latest !== schedule.syncedTo) await updateSchedule(schedule.id, { syncedTo: latest });
     }),
   );
-  for (const run of await listUnsettledScheduledRuns(agent.id, SETTLE_PER_SYNC)) await settleRun(run.sessionId);
+  for (const run of await listUnsettledScheduledRuns(agent.id, SETTLE_PER_SYNC)) await settleRun(agent, run.sessionId);
 }
 
-/** Checks where a run has got to and records it once it has stopped. Returns the status found. */
-export async function settleRun(sessionId: string): Promise<{ status: RunStatus; reply: string }> {
-  const tracker = await followSession(sessionId, { maxMs: 1_000 });
-  if (tracker.settled) await updateRun(sessionId, { status: tracker.status, output: tracker.reply || null, toolCalls: tracker.toolCalls });
-  return { status: tracker.settled ? tracker.status : "running", reply: tracker.reply };
+/**
+ * Checks where a run has got to and records it once it has stopped. For an
+ * agent with a flow, this is also what moves the flow to its next step.
+ * Returns the status found.
+ */
+export async function settleRun(agent: AgentRecord, sessionId: string): Promise<{ status: RunStatus; reply: string }> {
+  const outcome = await followRun(agent, sessionId, { maxMs: 1_000 });
+  if (outcome.status !== "running") await updateRun(sessionId, { status: outcome.status, output: outcome.reply || null, toolCalls: outcome.toolCalls });
+  return { status: outcome.status, reply: outcome.reply };
 }
 
 /**
@@ -177,11 +181,11 @@ export async function onSessionStopped(sessionId: string) {
   }
   if (!run || run.source !== "schedule") return;
 
-  const { status, reply } = await settleRun(sessionId);
-  if (status === "running") return;
-
   const agent = await getAgent(run.agentId);
   if (!agent) return;
+  const { status, reply } = await settleRun(agent, sessionId);
+  if (status === "running") return;
+
   schedule ??= (await listSchedules(agent.id)).find((s) => s.id === run.scheduleId) ?? null;
   const wanted = status === "requires_action" || status === "failed" || (status === "completed" && schedule?.emailResults === true);
   if (!wanted) return;

@@ -80,6 +80,8 @@ export interface AgentFlow {
   nodes: FlowNode[];
   edges: FlowEdge[];
   runner: { model: AgentModel; instructions: string };
+  /** Set by the server: altship runs the steps in order and checks each one. Missing on agents created before that. */
+  enforced?: boolean;
 }
 
 export interface AgentPlan {
@@ -136,6 +138,8 @@ export interface AgentRun {
 
 export type AgentUiEvent =
   | { kind: "user"; id: string; text: string; at: string | null }
+  /** A flow's step being started (flows run one step at a time). `request` is the user's message when it opens a new pass. */
+  | { kind: "step"; id: string; node: string; name: string; stepKind: FlowNode["type"]; route: string | null; retry: boolean; request: string | null; at: string | null }
   | { kind: "message"; id: string; text: string; at: string | null }
   | {
       kind: "tool_call";

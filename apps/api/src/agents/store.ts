@@ -1,4 +1,4 @@
-import type { AgentPlan } from "@altship/agent-design";
+import type { AgentPlan, FlowRunState } from "@altship/agent-design";
 import { getSupabase } from "../supabase.js";
 
 export interface AgentRecord {
@@ -382,5 +382,34 @@ export async function claimRunNotification(sessionId: string, status: RunStatus)
     .or(`notified_status.is.null,notified_status.neq.${status}`)
     .select("session_id");
   if (error) throw new Error(`Failed to record notification: ${error.message}`);
+  return (data ?? []).length > 0;
+}
+
+// ---- Flow runs ----------------------------------------------------------
+
+/**
+ * Where a run's flow has got to (for agents whose flow altship runs step by
+ * step), and a counter that goes up with every change. Null when the run
+ * isn't recorded; `state` is null until its flow has started.
+ */
+export async function getFlowRun(sessionId: string): Promise<{ state: FlowRunState | null; rev: number } | null> {
+  const { data, error } = await getSupabase().from("agent_runs").select("flow_state,flow_rev").eq("session_id", sessionId).maybeSingle();
+  if (error) throw new Error(`Failed to load the run's flow: ${error.message}`);
+  return data ? { state: (data.flow_state as FlowRunState | null) ?? null, rev: (data.flow_rev as number | null) ?? 0 } : null;
+}
+
+/**
+ * Saves the flow's new state if nothing else has moved it on since `rev` was
+ * read. False when something has: two followers of one run can't both send
+ * the next step.
+ */
+export async function saveFlowRun(sessionId: string, state: FlowRunState, rev: number): Promise<boolean> {
+  const { data, error } = await getSupabase()
+    .from("agent_runs")
+    .update({ flow_state: state, flow_rev: rev + 1 })
+    .eq("session_id", sessionId)
+    .eq("flow_rev", rev)
+    .select("session_id");
+  if (error) throw new Error(`Failed to save the run's flow: ${error.message}`);
   return (data ?? []).length > 0;
 }

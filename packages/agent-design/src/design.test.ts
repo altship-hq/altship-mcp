@@ -254,14 +254,21 @@ describe("execution flows", () => {
     expect(specialists.map((a) => a.name)).toEqual(["Extract", "India Agent", "Japan Agent"]);
     expect(coordinator.tools.map((t) => t.tool)).toEqual(["user.delete"]);
 
+    // The coordinator is sent the steps one at a time, so its own instructions don't spell the flow out.
     const text = coordinator.instructions;
-    expect(text).toContain("Start with step 1");
-    expect(text).toContain('Step 1. Hand the user\'s request to the agent "Extract"');
-    expect(text).toContain("Rule: Use the country the request is about.");
-    expect(text).toMatch(/- India: go to step 3/);
-    expect(text).toMatch(/- Japan: go to step 4/);
-    expect(text).toContain('Call the tool "user.delete" (from the petstore server) yourself');
+    expect(text).toContain("one step at a time");
+    expect(text).not.toContain("India");
     expect(text).toContain("Answer in English.");
+
+    // An agent saved before flows were enforced still has the whole flow as its instructions.
+    const validated = validatePlan(routed(), catalog);
+    const legacy = compileFlow({ ...validated, flowGraph: { ...validated.flowGraph!, enforced: undefined } }).agents[0].instructions;
+    expect(legacy).toContain("Start with step 1");
+    expect(legacy).toContain('Step 1. Hand the user\'s request to the agent "Extract"');
+    expect(legacy).toContain("Rule: Use the country the request is about.");
+    expect(legacy).toMatch(/- India: go to step 3/);
+    expect(legacy).toMatch(/- Japan: go to step 4/);
+    expect(legacy).toContain('Call the tool "user.delete" (from the petstore server) yourself');
 
     const params = toManagedAgentParams(compiled, catalog);
     expect(params.primary.key).toBe(coordinator.key);

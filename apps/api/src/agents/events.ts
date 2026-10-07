@@ -1,3 +1,4 @@
+import { parseStepMessage, type FlowNode, type StepEvidence } from "@altship/agent-design";
 import type {
   BetaManagedAgentsSessionEvent,
   BetaManagedAgentsStreamSessionEvents,
@@ -8,6 +9,12 @@ import type {
 
 export type AgentUiEvent =
   | { kind: "user"; id: string; text: string; at: string | null }
+  /**
+   * A flow's step being handed to its coordinator (flows run one step at a
+   * time, sent by altship). `request` is the user's message when this step
+   * opens a new pass through the flow.
+   */
+  | { kind: "step"; id: string; node: string; name: string; stepKind: FlowNode["type"]; route: string | null; retry: boolean; request: string | null; at: string | null }
   | { kind: "message"; id: string; text: string; at: string | null }
   | {
       kind: "tool_call";
@@ -40,8 +47,13 @@ export function toUiEvent(event: AnyEvent): AgentUiEvent | null {
   const at = "processed_at" in event ? (event.processed_at ?? null) : null;
 
   switch (event.type) {
-    case "user.message":
-      return { kind: "user", id: event.id, text: textOf(event.content), at };
+    case "user.message": {
+      const text = textOf(event.content);
+      const step = parseStepMessage(text);
+      if (!step) return { kind: "user", id: event.id, text, at };
+      const { node, name, kind, route, retry } = step.header;
+      return { kind: "step", id: event.id, node, name, stepKind: kind, route: route ?? null, retry: retry === true, request: step.request, at };
+    }
     case "agent.message":
       return { kind: "message", id: event.id, text: textOf(event.content), at };
     case "agent.mcp_tool_use":
@@ -126,13 +138,35 @@ export class TurnTracker {
   /** Tool calls the agent has made in the session so far (its whole history is replayed on each follow). */
   toolCalls = 0;
   status: "running" | "requires_action" | "completed" | "failed" = "running";
+  /** The flow step the latest input asked for; null when the latest input was an ordinary message. */
+  lastStep: string | null = null;
+  /** The latest ordinary message from the user. */
+  lastUserText = "";
+  private delegatedTo: string[] = [];
+  private toolsCalled: string[] = [];
+  private answers: { agent: string; text: string }[] = [];
+  private lastMessage = "";
 
   observe(event: AgentUiEvent) {
     switch (event.kind) {
       case "user":
+      case "step":
         this.waitingSinceUserInput = true;
         this.finalReply = "";
         this.status = "running";
+        this.delegatedTo = [];
+        this.toolsCalled = [];
+        this.answers = [];
+        this.lastMessage = "";
+        this.lastStep = event.kind === "step" ? event.node : null;
+        if (event.kind === "user") this.lastUserText = event.text;
+        break;
+      case "thread":
+        this.delegatedTo.push(event.agent);
+        break;
+      case "delegation":
+        if (event.direction === "sent") this.delegatedTo.push(event.agent);
+        else this.answers.push({ agent: event.agent, text: event.text });
         break;
       case "confirmation":
         this.asks.delete(event.toolCallId);
@@ -142,10 +176,12 @@ export class TurnTracker {
         break;
       case "tool_call":
         this.toolCalls += 1;
+        this.toolsCalled.push(event.tool);
         if (event.permission === "ask") this.asks.set(event.id, event);
         break;
       case "message":
         this.finalReply = this.finalReply ? `${this.finalReply}\n\n${event.text}` : event.text;
+        if (event.text) this.lastMessage = event.text;
         break;
       case "status":
         if (event.status === "terminated") {
@@ -174,5 +210,10 @@ export class TurnTracker {
 
   get reply(): string {
     return this.finalReply;
+  }
+
+  /** What was done in answer to the latest input, for checking a flow step was carried out. */
+  get evidence(): StepEvidence {
+    return { delegatedTo: [...this.delegatedTo], toolsCalled: [...this.toolsCalled], answers: [...this.answers], reply: this.finalReply, lastMessage: this.lastMessage };
   }
 }

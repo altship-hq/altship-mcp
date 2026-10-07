@@ -91,6 +91,8 @@ export interface FollowOptions {
   onEvent?: (event: AgentUiEvent) => void;
   /** Runs after the live stream is open but before history is read (e.g. to send a message stream-first). */
   afterStreamOpen?: () => Promise<void>;
+  /** Ids of events already passed to `onEvent` by an earlier follow of this session; they aren't passed again. */
+  emitted?: Set<string>;
 }
 
 /**
@@ -114,6 +116,8 @@ export async function followSession(sessionId: string, options: FollowOptions): 
     if (seen.has(event.id)) return;
     seen.add(event.id);
     tracker.observe(event);
+    if (options.emitted?.has(event.id)) return;
+    options.emitted?.add(event.id);
     options.onEvent?.(event);
   };
 

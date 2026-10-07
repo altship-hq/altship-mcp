@@ -7,7 +7,8 @@ import { PLANS, planOf, retentionCutoff } from "../plans.js";
 import { appsCatalogEntry, loadCatalog, publicEntry, serversUsedBy, toToolCatalog, type CatalogEntry } from "./catalog.js";
 import { AppsConfigError, appsEnabled, toolkitSlug } from "../apps/composio.js";
 import { planAgent, PlannerError } from "./planner.js";
-import { confirmToolCall, createAgentVault, createManagedAgents, followSession, sendUserMessage, startSession } from "./runtime.js";
+import { followRun, sendToAgent, type RunOutcome } from "./flow-run.js";
+import { confirmToolCall, createAgentVault, createManagedAgents, startSession } from "./runtime.js";
 import { requireAuth, userIdOf } from "../auth.js";
 import {
   ScheduleLimitError,
@@ -274,7 +275,8 @@ agentsRouter.post("/:id/sessions/:sid/messages", async (req, res) => {
   if (!(await getRun(agent.id, sessionId))) {
     await insertRun({ sessionId, agentId: agent.id, source: "playground", input: text });
   }
-  await sendUserMessage(sessionId, text);
+  // For an agent with a flow, this starts a pass through it.
+  await sendToAgent(agent, sessionId, text);
   res.status(202).json({ ok: true });
 });
 
@@ -305,15 +307,15 @@ agentsRouter.get("/:id/sessions/:sid/stream", async (req, res) => {
   req.on("close", () => abort.abort());
 
   try {
-    const tracker = await followSession(sessionId, {
+    const outcome = await followRun(agent, sessionId, {
       maxMs: STREAM_MAX_MS,
       signal: abort.signal,
       onEvent: (event) => res.write(`data: ${JSON.stringify(event)}\n\n`),
     });
-    if (tracker.settled && (await getRun(agent.id, sessionId))) {
-      await updateRun(sessionId, { status: tracker.status, output: tracker.reply || null, toolCalls: tracker.toolCalls });
+    if (outcome.status !== "running" && (await getRun(agent.id, sessionId))) {
+      await updateRun(sessionId, { status: outcome.status, output: outcome.reply || null, toolCalls: outcome.toolCalls });
     }
-    res.write(`event: done\ndata: ${JSON.stringify({ status: tracker.status })}\n\n`);
+    res.write(`event: done\ndata: ${JSON.stringify({ status: outcome.status })}\n\n`);
   } catch (err) {
     res.write(`event: failure\ndata: ${JSON.stringify({ error: errorMessage(err) })}\n\n`);
   }
@@ -330,8 +332,8 @@ agentsRouter.post("/:id/run", async (req, res) => {
 
   const sessionId = await startSession(await withVault(agent), `${agent.name} — API run`);
   await insertRun({ sessionId, agentId: agent.id, source: "endpoint", input });
-  const tracker = await followSession(sessionId, { maxMs: RUN_WAIT_MS, afterStreamOpen: () => sendUserMessage(sessionId, input) });
-  res.json(await runResponse(sessionId, tracker));
+  await sendToAgent(agent, sessionId, input);
+  res.json(await runResponse(sessionId, await followRun(agent, sessionId, { maxMs: RUN_WAIT_MS })));
 });
 
 agentsRouter.get("/:id/runs/:sid", async (req, res) => {
@@ -340,8 +342,7 @@ agentsRouter.get("/:id/runs/:sid", async (req, res) => {
   const sessionId = String(req.params.sid);
   if (!(await getRun(agent.id, sessionId))) return res.status(404).json({ error: "Run not found." });
 
-  const tracker = await followSession(sessionId, { maxMs: 1_000 });
-  res.json(await runResponse(sessionId, tracker));
+  res.json(await runResponse(sessionId, await followRun(agent, sessionId, { maxMs: 1_000 })));
 });
 
 agentsRouter.post("/:id/runs/:sid/confirm", async (req, res) => {
@@ -354,20 +355,22 @@ agentsRouter.post("/:id/runs/:sid/confirm", async (req, res) => {
   if (typeof toolCallId !== "string" || (result !== "allow" && result !== "deny")) {
     return res.status(400).json({ error: "toolCallId and result (allow | deny) are required." });
   }
-  const tracker = await followSession(sessionId, {
+  const outcome = await followRun(agent, sessionId, {
     maxMs: RUN_WAIT_MS,
     afterStreamOpen: () => confirmToolCall(sessionId, toolCallId, result, typeof denyMessage === "string" ? denyMessage : undefined),
   });
-  res.json(await runResponse(sessionId, tracker));
+  res.json(await runResponse(sessionId, outcome));
 });
 
-async function runResponse(sessionId: string, tracker: Awaited<ReturnType<typeof followSession>>) {
-  await updateRun(sessionId, { status: tracker.status, output: tracker.reply || null, toolCalls: tracker.toolCalls });
+async function runResponse(sessionId: string, outcome: RunOutcome) {
+  await updateRun(sessionId, { status: outcome.status, output: outcome.reply || null, toolCalls: outcome.toolCalls });
   return {
-    status: tracker.status,
+    status: outcome.status,
     session_id: sessionId,
-    output: tracker.status === "completed" ? tracker.reply : null,
-    pending_approvals: tracker.pendingApprovals.map((a) => ({ tool_call_id: a.id, server: a.server, tool: a.tool, input: a.input })),
+    output: outcome.status === "completed" ? outcome.reply : null,
+    // Why it stopped, when it failed (for a flow: which step, and what was missing).
+    ...(outcome.status === "failed" && outcome.reply ? { error: outcome.reply } : {}),
+    pending_approvals: outcome.pendingApprovals.map((a) => ({ tool_call_id: a.id, server: a.server, tool: a.tool, input: a.input })),
   };
 }
 

@@ -112,13 +112,16 @@ export interface FlowEdge {
 
 /**
  * An execution flow the user drew: steps and the connections between them.
- * It's run by a coordinator that follows it as instructions and hands work to
- * the agents in it (see flow.ts), so the order is followed by a model rather
- * than enforced.
+ * A coordinator carries the steps out and hands work to the agents in it.
+ * When `enforced`, the system sends it one step at a time and checks each
+ * (see flow-engine.ts); otherwise the whole flow is the coordinator's
+ * instructions and the order is only followed, not guaranteed.
  */
 export interface AgentFlow {
   nodes: FlowNode[];
   edges: FlowEdge[];
+  /** Set on every flow approved since flows were enforced; never taken from a request. */
+  enforced?: boolean;
   /** The coordinator that runs the flow. Not a node: it is the flow. */
   runner: {
     model: AgentModel;
